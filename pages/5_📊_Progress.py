@@ -1,10 +1,20 @@
 import streamlit as st
 
 from src.database.db import initialize_database
+
 from src.database.repository import (
     get_topic_mastery_for_student,
     get_quiz_statistics_for_student,
-    get_subject_progress
+    get_subject_progress,
+)
+
+from src.ai.recommendation import (
+    get_top_recommendation,
+)
+
+from src.ai.recommendation_explanation import (
+    generate_recommendation_reasons,
+    get_recommendation_summary,
 )
 
 
@@ -15,7 +25,7 @@ from src.database.repository import (
 st.set_page_config(
     page_title="Progress",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
 )
 
 
@@ -52,7 +62,6 @@ st.write(
     "Track your topic mastery, quiz performance, "
     "and identify what you should study next."
 )
-
 
 st.divider()
 
@@ -94,11 +103,13 @@ if not topics:
 
 total_topics = len(topics)
 
-
-overall_progress = sum(
-    float(topic["mastery"] or 0)
-    for topic in topics
-) / total_topics
+overall_progress = (
+    sum(
+        float(topic["mastery"] or 0)
+        for topic in topics
+    )
+    / total_topics
+)
 
 
 # ============================================================
@@ -122,7 +133,7 @@ if total_questions > 0:
 
 else:
 
-    quiz_accuracy = 0
+    quiz_accuracy = 0.0
 
 
 # ============================================================
@@ -152,7 +163,7 @@ with col1:
 
     st.metric(
         "Overall Progress",
-        f"{overall_progress:.0f}%"
+        f"{overall_progress:.0f}%",
     )
 
 
@@ -160,7 +171,7 @@ with col2:
 
     st.metric(
         "Quiz Accuracy",
-        f"{quiz_accuracy:.0f}%"
+        f"{quiz_accuracy:.0f}%",
     )
 
 
@@ -168,7 +179,7 @@ with col3:
 
     st.metric(
         "Concept Mastery",
-        f"{concept_mastery:.0f}%"
+        f"{concept_mastery:.0f}%",
     )
 
 
@@ -176,7 +187,7 @@ with col4:
 
     st.metric(
         "Quiz Attempts",
-        quiz_attempts
+        quiz_attempts,
     )
 
 
@@ -207,7 +218,13 @@ for subject in subject_progress:
     )
 
     st.progress(
-        min(max(mastery / 100, 0), 1)
+        min(
+            max(
+                mastery / 100,
+                0
+            ),
+            1
+        )
     )
 
     st.caption(
@@ -234,17 +251,17 @@ for topic in topics:
     )
 
     priority = (
-        topic["priority"]
+        topic.get("priority")
         or "MEDIUM"
     )
 
     status = (
-        topic["status"]
+        topic.get("status")
         or "Not Started"
     )
 
     unit = (
-        topic["unit"]
+        topic.get("unit")
         or "General"
     )
 
@@ -258,7 +275,13 @@ for topic in topics:
     )
 
     st.progress(
-        min(max(mastery / 100, 0), 1)
+        min(
+            max(
+                mastery / 100,
+                0
+            ),
+            1
+        )
     )
 
     st.write(
@@ -269,87 +292,307 @@ for topic in topics:
 
 
 # ============================================================
-# FIND WEAKEST TOPIC
+# AI ADAPTIVE RECOMMENDATION
 # ============================================================
 
-weakest_topic = min(
-    topics,
-    key=lambda topic: float(
-        topic["mastery"] or 0
-    )
-)
+st.subheader("✨ AI Study Recommendation")
 
 
-weakest_name = weakest_topic["name"]
+# ------------------------------------------------------------
+# Generate recommendation
+# ------------------------------------------------------------
 
-weakest_mastery = float(
-    weakest_topic["mastery"] or 0
-)
-
-weakest_status = (
-    weakest_topic["status"]
-    or "Not Started"
+recommendation = get_top_recommendation(
+    topics
 )
 
 
 # ============================================================
-# AI RECOMMENDATION
+# NO RECOMMENDATION
 # ============================================================
 
-st.subheader("✨ Study Recommendation")
+if recommendation is None:
 
-
-if weakest_mastery < 50:
-
-    st.error(
-        f"""
-### 📖 Relearn: {weakest_name}
-
-Your current mastery is only
-**{weakest_mastery:.0f}%**.
-
-Recommended action:
-
-1. Go to **📖 Learn**
-2. Review **{weakest_name}**
-3. Understand the key concepts
-4. Take another practice quiz
-"""
-    )
-
-elif weakest_mastery < 80:
-
-    st.warning(
-        f"""
-### 🔄 Revise: {weakest_name}
-
-Your current mastery is
-**{weakest_mastery:.0f}%**.
-
-You have a reasonable understanding,
-but this topic needs revision.
-
-Recommended action:
-
-- Review the learning material
-- Practice important concepts
-- Take another quiz
-"""
+    st.info(
+        "Complete a topic or quiz to generate "
+        "an adaptive recommendation."
     )
 
 else:
 
-    st.success(
-        f"""
+    recommended_topic = (
+        recommendation["topic"]
+    )
+
+    progress = (
+        recommendation["progress"]
+    )
+
+    adaptive_score = float(
+        recommendation["adaptive_score"]
+    )
+
+    action = (
+        recommendation["action"]
+    )
+
+    quiz_history = (
+        recommendation.get(
+            "quiz_stats",
+            {}
+        )
+        or {}
+    )
+
+    improvement = float(
+        recommendation.get(
+            "improvement",
+            0.0
+        )
+        or 0.0
+    )
+
+    topic_data = (
+        recommendation.get(
+            "topic_data",
+            {}
+        )
+        or {}
+    )
+
+    mastery = float(
+        progress.score_percentage
+    )
+
+    priority = (
+        topic_data.get("priority")
+        or "MEDIUM"
+    )
+
+
+    # ========================================================
+    # RECOMMENDED TOPIC
+    # ========================================================
+
+    st.markdown(
+        f"### 🎯 Next Topic: {recommended_topic}"
+    )
+
+    st.caption(
+        f"Priority: {priority}"
+    )
+
+
+    # ========================================================
+    # RECOMMENDATION METRICS
+    # ========================================================
+
+    col1, col2, col3, col4 = st.columns(4)
+
+
+    with col1:
+
+        st.metric(
+            "Mastery",
+            f"{mastery:.0f}%"
+        )
+
+
+    with col2:
+
+        historical_accuracy = float(
+            quiz_history.get(
+                "accuracy",
+                0.0
+            )
+            or 0.0
+        )
+
+        st.metric(
+            "Quiz Accuracy",
+            f"{historical_accuracy:.0f}%"
+        )
+
+
+    with col3:
+
+        attempts = int(
+            quiz_history.get(
+                "attempts",
+                0
+            )
+            or 0
+        )
+
+        st.metric(
+            "Quiz Attempts",
+            attempts
+        )
+
+
+    with col4:
+
+        st.metric(
+            "Adaptive Score",
+            f"{adaptive_score:.2f}"
+        )
+
+
+    # ========================================================
+    # PHASE 5.3 — EXPLAINABLE RECOMMENDATION
+    # ========================================================
+
+    st.markdown(
+        "### 🧠 Why was this topic recommended?"
+    )
+
+    recommendation_summary = (
+        get_recommendation_summary(
+            recommendation
+        )
+    )
+
+    st.info(
+        recommendation_summary
+    )
+
+    recommendation_reasons = (
+        generate_recommendation_reasons(
+            recommendation
+        )
+    )
+
+    if recommendation_reasons:
+
+        for reason in recommendation_reasons:
+
+            st.markdown(
+                f"- {reason}"
+            )
+
+    else:
+
+        st.caption(
+            "No detailed explanation is available yet."
+        )
+
+
+    # ========================================================
+    # PERFORMANCE TREND
+    # ========================================================
+
+    st.markdown(
+        "#### 📈 Performance Trend"
+    )
+
+
+    if improvement > 0:
+
+        st.success(
+            f"📈 Improving by **{improvement:.1f}%** "
+            "compared with the previous quiz."
+        )
+
+    elif improvement < 0:
+
+        st.error(
+            f"📉 Performance decreased by "
+            f"**{abs(improvement):.1f}%** "
+            "compared with the previous quiz."
+        )
+
+    else:
+
+        if attempts >= 2:
+
+            st.info(
+                "📊 No significant performance change "
+                "was detected between recent quizzes."
+            )
+
+        else:
+
+            st.info(
+                "📊 Not enough quiz history to determine "
+                "a performance trend yet."
+            )
+
+
+    # ========================================================
+    # RECOMMENDED ACTION
+    # ========================================================
+
+    st.markdown(
+        "#### 🧠 Recommended Action"
+    )
+
+
+    if action == "RELEARN":
+
+        st.error(
+            f"""
+### 📖 Relearn: {recommended_topic}
+
+Your current mastery is only
+**{mastery:.0f}%**.
+
+Recommended steps:
+
+1. Go to **📖 Learn**
+2. Study **{recommended_topic}**
+3. Review the important concepts
+4. Take another practice quiz
+"""
+        )
+
+
+    elif action == "REVISE":
+
+        st.warning(
+            f"""
+### 🔄 Revise: {recommended_topic}
+
+Your current mastery is
+**{mastery:.0f}%**.
+
+You have a reasonable understanding,
+but this topic needs revision.
+
+Recommended steps:
+
+1. Review the learning material
+2. Practice important concepts
+3. Take another quiz
+"""
+        )
+
+
+    elif action == "MOVE_FORWARD":
+
+        st.success(
+            f"""
 ### 🚀 Move Forward
 
-Your weakest topic is **{weakest_name}**
-with **{weakest_mastery:.0f}%** mastery.
+Your understanding of
+**{recommended_topic}**
+is strong.
 
-Your understanding is strong enough to
-continue to another topic.
+You can continue to another topic.
 """
-    )
+        )
+
+
+    else:
+
+        st.info(
+            f"""
+### 📚 Continue Studying
+
+Continue studying
+**{recommended_topic}**
+according to your adaptive study plan.
+"""
+        )
 
 
 # ============================================================
@@ -361,22 +604,51 @@ st.divider()
 st.subheader("🎯 What should you do next?")
 
 
-if weakest_mastery < 50:
+if recommendation is None:
 
     st.info(
-        "📖 Go to Learn and relearn your weakest topic."
-    )
-
-elif weakest_mastery < 80:
-
-    st.info(
-        "🔄 Revise your weakest topic and attempt "
-        "another quiz."
+        "Complete a topic or quiz to generate "
+        "an adaptive recommendation."
     )
 
 else:
 
-    st.info(
-        "🚀 Your topics are progressing well. "
-        "Continue with the next important topic."
+    recommended_topic = (
+        recommendation["topic"]
     )
+
+    action = (
+        recommendation["action"]
+    )
+
+
+    if action == "RELEARN":
+
+        st.info(
+            f"📖 Go to Learn and relearn "
+            f"**{recommended_topic}**."
+        )
+
+
+    elif action == "REVISE":
+
+        st.info(
+            f"🔄 Revise **{recommended_topic}** "
+            "and attempt another quiz."
+        )
+
+
+    elif action == "MOVE_FORWARD":
+
+        st.info(
+            f"🚀 You can move forward after "
+            f"completing **{recommended_topic}**."
+        )
+
+
+    else:
+
+        st.info(
+            f"📚 Continue studying "
+            f"**{recommended_topic}**."
+        )
