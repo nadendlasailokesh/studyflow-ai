@@ -2,9 +2,9 @@ import sqlite3
 from pathlib import Path
 
 
-# -----------------------------------
-# Database Location
-# -----------------------------------
+# ============================================================
+# DATABASE LOCATION
+# ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -17,9 +17,9 @@ DATABASE_DIR.mkdir(
 DATABASE_PATH = DATABASE_DIR / "studyflow.db"
 
 
-# -----------------------------------
-# Database Connection
-# -----------------------------------
+# ============================================================
+# DATABASE CONNECTION
+# ============================================================
 
 def get_connection():
 
@@ -29,7 +29,6 @@ def get_connection():
 
     connection.row_factory = sqlite3.Row
 
-    # Enable foreign key constraints
     connection.execute(
         "PRAGMA foreign_keys = ON"
     )
@@ -37,9 +36,76 @@ def get_connection():
     return connection
 
 
-# -----------------------------------
-# Initialize Database
-# -----------------------------------
+# ============================================================
+# DATABASE MIGRATION
+# ============================================================
+
+def migrate_topics_table(connection):
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        "PRAGMA table_info(topics)"
+    )
+
+    columns = {
+        row["name"]
+        for row in cursor.fetchall()
+    }
+
+    # --------------------------------------------------------
+    # Estimated study time
+    # --------------------------------------------------------
+
+    if "estimated_minutes" not in columns:
+
+        cursor.execute(
+            """
+            ALTER TABLE topics
+            ADD COLUMN estimated_minutes INTEGER
+            DEFAULT 60
+            """
+        )
+
+
+    # --------------------------------------------------------
+    # AI explanation for priority
+    # --------------------------------------------------------
+
+    if "reason" not in columns:
+
+        cursor.execute(
+            """
+            ALTER TABLE topics
+            ADD COLUMN reason TEXT
+            """
+        )
+
+
+    # --------------------------------------------------------
+    # Prerequisites
+    #
+    # Stored as JSON text:
+    # ["Morphology", "Automata"]
+    # --------------------------------------------------------
+
+    if "prerequisites" not in columns:
+
+        cursor.execute(
+            """
+            ALTER TABLE topics
+            ADD COLUMN prerequisites TEXT
+            DEFAULT '[]'
+            """
+        )
+
+
+    connection.commit()
+
+
+# ============================================================
+# INITIALIZE DATABASE
+# ============================================================
 
 def initialize_database():
 
@@ -48,7 +114,10 @@ def initialize_database():
     cursor = connection.cursor()
 
 
-    # Students
+    # ========================================================
+    # STUDENTS
+    # ========================================================
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS students (
@@ -59,13 +128,17 @@ def initialize_database():
 
             knowledge_level TEXT,
 
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
 
 
-    # Subjects
+    # ========================================================
+    # SUBJECTS
+    # ========================================================
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS subjects (
@@ -82,7 +155,8 @@ def initialize_database():
 
             goal TEXT,
 
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY (student_id)
                 REFERENCES students(id)
@@ -92,7 +166,10 @@ def initialize_database():
     )
 
 
-    # Topics
+    # ========================================================
+    # TOPICS
+    # ========================================================
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS topics (
@@ -105,11 +182,17 @@ def initialize_database():
 
             unit TEXT,
 
-            priority TEXT DEFAULT 'Medium',
+            priority TEXT DEFAULT 'MEDIUM',
 
             mastery REAL DEFAULT 0.0,
 
             status TEXT DEFAULT 'Not Started',
+
+            estimated_minutes INTEGER DEFAULT 60,
+
+            reason TEXT,
+
+            prerequisites TEXT DEFAULT '[]',
 
             FOREIGN KEY (subject_id)
                 REFERENCES subjects(id)
@@ -119,7 +202,10 @@ def initialize_database():
     )
 
 
-    # Study Tasks
+    # ========================================================
+    # STUDY TASKS
+    # ========================================================
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS study_tasks (
@@ -144,7 +230,10 @@ def initialize_database():
     )
 
 
-    # Quiz Attempts
+    # ========================================================
+    # QUIZ ATTEMPTS
+    # ========================================================
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS quiz_attempts (
@@ -159,7 +248,8 @@ def initialize_database():
 
             difficulty TEXT,
 
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY (topic_id)
                 REFERENCES topics(id)
@@ -169,7 +259,10 @@ def initialize_database():
     )
 
 
-    # Learning Sessions
+    # ========================================================
+    # LEARNING SESSIONS
+    # ========================================================
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS learning_sessions (
@@ -182,7 +275,8 @@ def initialize_database():
 
             duration_minutes INTEGER,
 
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY (topic_id)
                 REFERENCES topics(id)
@@ -193,5 +287,15 @@ def initialize_database():
 
 
     connection.commit()
+
+
+    # ========================================================
+    # MIGRATE EXISTING DATABASE
+    # ========================================================
+
+    migrate_topics_table(
+        connection
+    )
+
 
     connection.close()
