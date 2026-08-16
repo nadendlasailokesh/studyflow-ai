@@ -120,6 +120,7 @@ def get_student_by_name(name):
         connection.close()
 # ============================================================
 # UPDATE STUDENT PROFILE
+
 # ============================================================
 
 def update_student(

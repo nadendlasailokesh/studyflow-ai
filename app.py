@@ -145,46 +145,78 @@ with st.sidebar:
     # Student
     # --------------------------------------------------------
 
-    st.subheader("👤 Student")
+    # --------------------------------------------------------
+# Student
+# --------------------------------------------------------
 
-    entered_name = st.text_input(
-        "Your name",
-        value=st.session_state.student_name,
-        placeholder="Enter your name",
-    )
+st.subheader("👤 Student")
 
-    if entered_name.strip():
+entered_name = st.text_input(
+    "Your name",
+    value=st.session_state.student_name,
+    placeholder="Enter your name",
+)
 
-        normalized_name = entered_name.strip()
+if entered_name.strip():
 
-        if (
-            normalized_name.lower()
-            != st.session_state.student_name.strip().lower()
-        ):
+    normalized_name = entered_name.strip()
 
-            st.session_state.student_name = normalized_name
+    # Check whether the entered name is different
+    # from the currently loaded student
+    if (
+        normalized_name.lower()
+        != st.session_state.student_name.strip().lower()
+    ):
 
-        # ----------------------------------------------------
-        # Reuse existing student instead of creating duplicate
-        # ----------------------------------------------------
+        # ------------------------------------------------
+        # Search database
+        # ------------------------------------------------
 
-            existing_student = get_student_by_name(
+        existing_student = get_student_by_name(
+            normalized_name
+        )
+
+        # ------------------------------------------------
+        # Existing student
+        # ------------------------------------------------
+
+        if existing_student:
+
+            st.session_state.student_id = (
+                existing_student["id"]
+            )
+
+            st.session_state.student_name = (
+                existing_student["name"]
+            )
+
+            st.success(
+                f"Welcome back, "
+                f"{existing_student['name']}! 👋"
+            )
+
+        # ------------------------------------------------
+        # New student
+        # ------------------------------------------------
+
+        else:
+
+            new_student_id = create_student(
                 normalized_name
             )
 
-            if existing_student:
+            st.session_state.student_id = (
+                new_student_id
+            )
 
-                st.session_state.student_id = (
-                    existing_student["id"]
-                )
+            st.session_state.student_name = (
+                normalized_name
+            )
 
-            else:
-
-                st.session_state.student_id = (
-                    create_student(
-                        normalized_name
-                    )
-                )
+            st.success(
+                f"New student profile created "
+                f"for {normalized_name}! 🎉"
+            )
     st.divider()
 
     # --------------------------------------------------------
@@ -756,19 +788,19 @@ elif st.session_state.page == "📚 Subjects":
                             student_name
                         )
 
-                    if existing_student:
+                        if existing_student:
 
-                        st.session_state.student_id = (
-                            existing_student["id"]
+                            st.session_state.student_id = (
+                                existing_student["id"]
                         )
 
-                    else:
+                        else:
 
-                        st.session_state.student_id = (
-                            create_student(
-                                student_name
+                            st.session_state.student_id = (
+                                create_student(
+                                    student_name
+                                )
                             )
-                        )
 
                     subject_id = create_subject(
 
