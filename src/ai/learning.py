@@ -12,25 +12,195 @@ from src.ai.prompts import (
 )
 
 
+# ============================================================
+# CLEAN AI RESPONSE
+# ============================================================
+
 def _clean_response(response):
     """
     Clean AI response by removing Markdown
-    code fences if the model adds them.
+    code fences and accidental text around JSON.
     """
+
+    if not response:
+
+        raise ValueError(
+            "AI returned an empty response."
+        )
 
     response = response.strip()
 
+    # --------------------------------------------------------
+    # Remove Markdown code fences
+    # --------------------------------------------------------
+
     if response.startswith("```json"):
-        response = response[len("```json"):].strip()
+
+        response = response[
+            len("```json"):
+        ].strip()
 
     elif response.startswith("```"):
-        response = response[len("```"):].strip()
+
+        response = response[
+            len("```"):
+        ].strip()
 
     if response.endswith("```"):
-        response = response[:-3].strip()
 
-    return response
+        response = response[
+            :-3
+        ].strip()
 
+    # --------------------------------------------------------
+    # Find JSON object
+    # --------------------------------------------------------
+
+    start = response.find("{")
+    end = response.rfind("}")
+
+    if start == -1 or end == -1:
+
+        raise ValueError(
+            "AI response does not contain valid JSON."
+        )
+
+    return response[
+        start:end + 1
+    ]
+
+
+# ============================================================
+# NORMALIZE STRING LIST
+# ============================================================
+
+def _normalize_string_list(value):
+    """
+    Convert different AI response formats into list[str].
+
+    Supported formats:
+
+        ["Concept A", "Concept B"]
+
+    and:
+
+        [
+            {
+                "term": "Concept A",
+                "explanation": "Explanation"
+            }
+        ]
+    """
+
+    if value is None:
+
+        return []
+
+    if isinstance(value, str):
+
+        text = value.strip()
+
+        if not text:
+            return []
+
+        return [text]
+
+    if not isinstance(value, list):
+
+        return [str(value)]
+
+    normalized = []
+
+    for item in value:
+
+        # ----------------------------------------------------
+        # Normal string
+        # ----------------------------------------------------
+
+        if isinstance(item, str):
+
+            text = item.strip()
+
+            if text:
+                normalized.append(text)
+
+            continue
+
+        # ----------------------------------------------------
+        # Structured object returned by newer AI responses
+        # ----------------------------------------------------
+
+        if isinstance(item, dict):
+
+            term = item.get("term")
+
+            explanation = item.get(
+                "explanation"
+            )
+
+            if term and explanation:
+
+                normalized.append(
+                    f"{term}: {explanation}"
+                )
+
+            elif term:
+
+                normalized.append(
+                    str(term)
+                )
+
+            else:
+
+                title = (
+                    item.get("title")
+                    or item.get("name")
+                    or item.get("concept")
+                )
+
+                description = (
+                    item.get("description")
+                    or item.get("details")
+                    or item.get("example")
+                )
+
+                if title and description:
+
+                    normalized.append(
+                        f"{title}: {description}"
+                    )
+
+                elif title:
+
+                    normalized.append(
+                        str(title)
+                    )
+
+                else:
+
+                    normalized.append(
+                        json.dumps(
+                            item,
+                            ensure_ascii=False
+                        )
+                    )
+
+            continue
+
+        # ----------------------------------------------------
+        # Unexpected type
+        # ----------------------------------------------------
+
+        normalized.append(
+            str(item)
+        )
+
+    return normalized
+
+
+# ============================================================
+# GENERATE LEARNING CONTENT
+# ============================================================
 
 def generate_learning_content(
     subject_name,
@@ -40,11 +210,13 @@ def generate_learning_content(
 ):
     """
     Generate structured learning content for a topic.
+
+    Supports both current and legacy AI response formats.
     """
 
-    # -----------------------------------
+    # --------------------------------------------------------
     # Build user prompt
-    # -----------------------------------
+    # --------------------------------------------------------
 
     user_prompt = build_learning_content_prompt(
         subject_name=subject_name,
@@ -53,9 +225,9 @@ def generate_learning_content(
         prerequisites=prerequisites
     )
 
-    # -----------------------------------
+    # --------------------------------------------------------
     # Complete AI prompt
-    # -----------------------------------
+    # --------------------------------------------------------
 
     prompt = f"""
 {LEARNING_CONTENT_SYSTEM_PROMPT}
@@ -73,9 +245,33 @@ The content should help a student:
 5. Avoid common mistakes.
 6. Test their understanding using a quick-check question.
 
-Return ONLY valid JSON.
+STRICT JSON REQUIREMENTS:
 
-Do NOT use Markdown code fences.
+1. Return ONLY valid JSON.
+2. Do NOT use Markdown code fences.
+3. Do NOT add explanation outside JSON.
+4. key_concepts MUST be an array of strings.
+5. examples MUST be an array of strings.
+6. important_points MUST be an array of strings.
+7. common_mistakes MUST be an array of strings.
+8. Do NOT return objects inside these arrays.
+
+CORRECT:
+
+"key_concepts": [
+    "Regular expressions",
+    "Finite automata",
+    "Pattern matching"
+]
+
+NOT ALLOWED:
+
+"key_concepts": [
+    {{
+        "term": "Regular expressions",
+        "explanation": "..."
+    }}
+]
 
 Use EXACTLY this structure:
 
@@ -109,25 +305,25 @@ Use EXACTLY this structure:
 }}
 """
 
-    # -----------------------------------
+    # --------------------------------------------------------
     # Call AI
-    # -----------------------------------
+    # --------------------------------------------------------
 
     response = ai_client.generate(
         prompt
     )
 
-    # -----------------------------------
-    # Clean AI response
-    # -----------------------------------
+    # --------------------------------------------------------
+    # Clean response
+    # --------------------------------------------------------
 
     response = _clean_response(
         response
     )
 
-    # -----------------------------------
+    # --------------------------------------------------------
     # Parse JSON
-    # -----------------------------------
+    # --------------------------------------------------------
 
     try:
 
@@ -139,28 +335,45 @@ Use EXACTLY this structure:
 
         raise ValueError(
             "AI returned invalid JSON "
-            "for learning content."
+            "for learning content.\n\n"
+            f"JSON error: {error}\n\n"
+            f"AI response: {response}"
         ) from error
 
-    # -----------------------------------
-    # Ensure required values
-    # -----------------------------------
+    # --------------------------------------------------------
+    # Ensure dictionary
+    # --------------------------------------------------------
+
+    if not isinstance(data, dict):
+
+        raise ValueError(
+            "AI returned learning content "
+            "in an invalid format."
+        )
+
+    # ========================================================
+    # IDENTITY FIELDS
+    # ========================================================
 
     if not data.get("subject"):
+
         data["subject"] = subject_name
 
     if not data.get("unit"):
+
         data["unit"] = unit
 
     if not data.get("topic"):
+
         data["topic"] = topic
 
-    # -----------------------------------
-    # Backward compatibility
-    # -----------------------------------
+    # ========================================================
+    # LEGACY FIELD COMPATIBILITY
+    # ========================================================
 
-    # Older AI responses may return
-    # "key_points" instead of "key_concepts".
+    # --------------------------------------------------------
+    # key_points -> key_concepts
+    # --------------------------------------------------------
 
     if (
         "key_concepts" not in data
@@ -171,9 +384,9 @@ Use EXACTLY this structure:
             data["key_points"]
         )
 
-    # Older AI responses may return
-    # a single "example" instead of
-    # an "examples" list.
+    # --------------------------------------------------------
+    # example -> examples
+    # --------------------------------------------------------
 
     if (
         "examples" not in data
@@ -184,16 +397,9 @@ Use EXACTLY this structure:
             data["example"]
         ]
 
-    # Older AI responses may return
-    # "important_points".
-
-    if "important_points" not in data:
-
-        data["important_points"] = []
-
-    # -----------------------------------
-    # Safe defaults
-    # -----------------------------------
+    # ========================================================
+    # DEFAULT VALUES
+    # ========================================================
 
     if "key_concepts" not in data:
 
@@ -202,6 +408,10 @@ Use EXACTLY this structure:
     if "examples" not in data:
 
         data["examples"] = []
+
+    if "important_points" not in data:
+
+        data["important_points"] = []
 
     if "common_mistakes" not in data:
 
@@ -231,10 +441,40 @@ Use EXACTLY this structure:
 
         data["estimated_minutes"] = 30
 
-    # -----------------------------------
-    # Validate with Pydantic
-    # -----------------------------------
+    # ========================================================
+    # NORMALIZE LIST FIELDS
+    # ========================================================
 
-    return LearningContent.model_validate(
-        data
+    data["key_concepts"] = _normalize_string_list(
+        data["key_concepts"]
     )
+
+    data["examples"] = _normalize_string_list(
+        data["examples"]
+    )
+
+    data["important_points"] = _normalize_string_list(
+        data["important_points"]
+    )
+
+    data["common_mistakes"] = _normalize_string_list(
+        data["common_mistakes"]
+    )
+
+    # ========================================================
+    # VALIDATE WITH PYDANTIC
+    # ========================================================
+
+    try:
+
+        return LearningContent.model_validate(
+            data
+        )
+
+    except Exception as error:
+
+        raise ValueError(
+            "AI returned invalid learning content.\n\n"
+            f"Validation error:\n{error}\n\n"
+            f"Normalized data:\n{data}"
+        ) from error

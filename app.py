@@ -11,6 +11,10 @@ from src.database.subjects import (
     delete_subject,
 )
 
+from src.database.repository import (
+    get_student_by_name,
+)
+
 from src.database.dashboard import (
     get_subject_topics,
     get_topic_statistics,
@@ -149,28 +153,38 @@ with st.sidebar:
         placeholder="Enter your name",
     )
 
-    if entered_name:
+    if entered_name.strip():
+
+        normalized_name = entered_name.strip()
 
         if (
-            entered_name
-            != st.session_state.student_name
+            normalized_name.lower()
+            != st.session_state.student_name.strip().lower()
         ):
 
-            st.session_state.student_name = (
-                entered_name
+            st.session_state.student_name = normalized_name
+
+        # ----------------------------------------------------
+        # Reuse existing student instead of creating duplicate
+        # ----------------------------------------------------
+
+            existing_student = get_student_by_name(
+                normalized_name
             )
 
-            if (
-                st.session_state.student_id
-                is None
-            ):
+            if existing_student:
+
+                st.session_state.student_id = (
+                    existing_student["id"]
+                )
+
+            else:
 
                 st.session_state.student_id = (
                     create_student(
-                        entered_name
+                        normalized_name
                     )
                 )
-
     st.divider()
 
     # --------------------------------------------------------
@@ -731,15 +745,28 @@ elif st.session_state.page == "📚 Subjects":
 
                 else:
 
-                    if (
-                        st.session_state.student_id
-                        is None
-                    ):
+                    if st.session_state.student_id is None:
+
+                        student_name = (
+                            st.session_state.student_name
+                            or "Student"
+                        ).strip()
+
+                        existing_student = get_student_by_name(
+                            student_name
+                        )
+
+                    if existing_student:
+
+                        st.session_state.student_id = (
+                            existing_student["id"]
+                        )
+
+                    else:
 
                         st.session_state.student_id = (
                             create_student(
-                                st.session_state.student_name
-                                or "Student"
+                                student_name
                             )
                         )
 

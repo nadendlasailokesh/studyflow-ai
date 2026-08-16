@@ -1,20 +1,16 @@
 import sqlite3
-from pathlib import Path
+
+from src.config import DATABASE_PATH
 
 
 # ============================================================
 # DATABASE LOCATION
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-
-DATABASE_DIR = BASE_DIR / "data"
-
-DATABASE_DIR.mkdir(
+DATABASE_PATH.parent.mkdir(
+    parents=True,
     exist_ok=True
 )
-
-DATABASE_PATH = DATABASE_DIR / "studyflow.db"
 
 
 # ============================================================
@@ -276,6 +272,39 @@ def initialize_database():
             duration_minutes INTEGER,
 
             created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (topic_id)
+                REFERENCES topics(id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+
+        # ========================================================
+    # TOPIC REVISION SCHEDULE
+    # ========================================================
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS topic_revision (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            topic_id INTEGER NOT NULL UNIQUE,
+
+            revision_streak INTEGER DEFAULT 0,
+
+            review_interval_days INTEGER DEFAULT 0,
+
+            last_reviewed_at TEXT,
+
+            next_review_date TEXT,
+
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP,
+
+            updated_at TIMESTAMP
                 DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY (topic_id)

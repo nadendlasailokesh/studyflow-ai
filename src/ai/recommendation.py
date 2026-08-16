@@ -1,5 +1,15 @@
-from src.ai.adaptive_planner import get_adaptive_action
-from src.ai.progress_schema import TopicProgress
+# ============================================================
+# ADAPTIVE RECOMMENDATION ENGINE
+# StudyFlow AI
+# ============================================================
+
+from src.ai.adaptive_planner import (
+    get_adaptive_action,
+)
+
+from src.ai.progress_schema import (
+    TopicProgress,
+)
 
 from src.database.progress import (
     get_quiz_statistics,
@@ -11,16 +21,14 @@ from src.database.progress import (
 # STATUS NORMALIZATION
 # ============================================================
 
-def normalize_status(status, mastery):
-    """
-    Convert database status values into the standardized
-    progress status used by the AI recommendation system.
-    """
+def normalize_status(
+    status,
+    mastery
+):
 
-    if not status:
-        status = ""
-
-    normalized = str(status).strip().upper()
+    normalized = str(
+        status or ""
+    ).strip().upper()
 
     if normalized in {
         "NOT_STARTED",
@@ -40,7 +48,10 @@ def normalize_status(status, mastery):
     if normalized == "STRONG":
         return "STRONG"
 
+    # --------------------------------------------------------
     # Fallback based on mastery
+    # --------------------------------------------------------
+
     if mastery >= 80:
         return "STRONG"
 
@@ -58,12 +69,6 @@ def normalize_status(status, mastery):
 # ============================================================
 
 def calculate_history_score(topic):
-    """
-    Calculate how urgently a topic needs attention based
-    on previous quiz performance.
-
-    Higher score = higher learning need.
-    """
 
     quiz_stats = topic.get(
         "quiz_stats",
@@ -99,43 +104,41 @@ def calculate_history_score(topic):
         return 1.0
 
     # --------------------------------------------------------
-    # Lower accuracy = higher learning need
+    # Weak performance
     # --------------------------------------------------------
 
     weakness_score = (
-        (100 - accuracy) / 100
+        (100.0 - accuracy)
+        / 100.0
     )
 
     # --------------------------------------------------------
-    # Negative improvement = increased urgency
+    # Performance trend
     # --------------------------------------------------------
 
-    decline_score = 0.0
+    trend_score = 0.0
 
     if improvement < 0:
 
-        decline_score = min(
-            abs(improvement) / 100,
+        trend_score = min(
+            abs(improvement) / 100.0,
             1.0
         )
 
-    # --------------------------------------------------------
-    # Positive improvement = reduced urgency
-    # --------------------------------------------------------
+    elif improvement > 0:
 
-    improvement_bonus = 0.0
-
-    if improvement > 0:
-
-        improvement_bonus = min(
-            improvement / 100,
+        trend_score = -min(
+            improvement / 100.0,
             0.5
         )
 
+    # --------------------------------------------------------
+    # Final history score
+    # --------------------------------------------------------
+
     history_score = (
         weakness_score
-        + decline_score
-        - improvement_bonus
+        + trend_score
     )
 
     return max(
@@ -149,16 +152,6 @@ def calculate_history_score(topic):
 # ============================================================
 
 def calculate_adaptive_score(topic):
-    """
-    Calculate the final adaptive priority score.
-
-    Factors:
-        1. Topic priority
-        2. Current mastery
-        3. Historical quiz performance
-
-    Higher score = topic should be studied sooner.
-    """
 
     base_score = float(
         topic.get(
@@ -167,40 +160,57 @@ def calculate_adaptive_score(topic):
         )
     )
 
-    progress = topic["progress"]
+    progress = topic.get(
+        "progress"
+    )
+
+    if progress is None:
+        return 0.0
 
     mastery = float(
         progress.score_percentage
     )
 
     # --------------------------------------------------------
-    # Lower mastery = higher need
+    # Mastery weakness
     # --------------------------------------------------------
 
     mastery_score = (
-        (100 - mastery) / 100
+        (100.0 - mastery)
+        / 100.0
     )
 
     # --------------------------------------------------------
-    # Historical performance
+    # Quiz history
     # --------------------------------------------------------
 
-    history_score = calculate_history_score(
-        topic
+    history_score = (
+        calculate_history_score(
+            topic
+        )
     )
 
     # --------------------------------------------------------
-    # Final adaptive score
+    # Final score
     # --------------------------------------------------------
 
     adaptive_score = (
         base_score
-        + (mastery_score * 3.0)
-        + (history_score * 2.0)
+        + (
+            mastery_score
+            * 3.0
+        )
+        + (
+            history_score
+            * 2.0
+        )
     )
 
     return round(
-        adaptive_score,
+        max(
+            adaptive_score,
+            0.0
+        ),
         3
     )
 
@@ -209,42 +219,46 @@ def calculate_adaptive_score(topic):
 # BUILD TOPIC RECOMMENDATIONS
 # ============================================================
 
-def build_topic_recommendations(topics):
-    """
-    Convert database topics into adaptive planner input
-    and rank them according to learning needs.
-    """
+def build_topic_recommendations(
+    topics
+):
 
     adaptive_topics = []
 
     for topic in topics:
 
         # ----------------------------------------------------
-        # Basic topic information
+        # Mastery
         # ----------------------------------------------------
 
         mastery = float(
-            topic.get("mastery") or 0.0
+            topic.get(
+                "mastery"
+            )
+            or 0.0
         )
 
-        topic_id = topic.get("id")
+        topic_id = topic.get(
+            "id"
+        )
 
         # ----------------------------------------------------
         # Default quiz statistics
         # ----------------------------------------------------
 
         quiz_stats = {
+
             "attempts": 0,
+
             "total_questions": 0,
-            "correct_answers": 0,
+
+            "correct_answers": 0.0,
+
             "accuracy": 0.0,
         }
 
         recent_performance = []
 
-        # IMPORTANT:
-        # Always initialize improvement.
-        # Otherwise it can be undefined when topic_id is None.
         improvement = 0.0
 
         # ----------------------------------------------------
@@ -253,18 +267,12 @@ def build_topic_recommendations(topics):
 
         if topic_id is not None:
 
-            quiz_stats = get_quiz_statistics(
-                topic_id
+            quiz_stats = (
+                get_quiz_statistics(
+                    topic_id
+                )
+                or quiz_stats
             )
-
-            if quiz_stats is None:
-
-                quiz_stats = {
-                    "attempts": 0,
-                    "total_questions": 0,
-                    "correct_answers": 0,
-                    "accuracy": 0.0,
-                }
 
             recent_performance = (
                 get_recent_quiz_performance(
@@ -274,10 +282,12 @@ def build_topic_recommendations(topics):
             )
 
             # ------------------------------------------------
-            # Calculate improvement
+            # Recent performance trend
             # ------------------------------------------------
 
-            if len(recent_performance) >= 2:
+            if len(
+                recent_performance
+            ) >= 2:
 
                 latest_accuracy = float(
                     recent_performance[0].get(
@@ -303,17 +313,22 @@ def build_topic_recommendations(topics):
         # ----------------------------------------------------
 
         status = normalize_status(
-            topic.get("status"),
+            topic.get(
+                "status"
+            ),
             mastery
         )
 
         # ----------------------------------------------------
-        # Create progress object
+        # Build progress model
         # ----------------------------------------------------
 
         progress = TopicProgress(
 
-            topic=topic["name"],
+            topic=topic.get(
+                "name",
+                "Unknown Topic"
+            ),
 
             attempts=int(
                 quiz_stats.get(
@@ -323,9 +338,13 @@ def build_topic_recommendations(topics):
             ),
 
             correct_answers=int(
-                quiz_stats.get(
-                    "correct_answers",
-                    0
+                round(
+                    float(
+                        quiz_stats.get(
+                            "correct_answers",
+                            0.0
+                        )
+                    )
                 )
             ),
 
@@ -338,26 +357,34 @@ def build_topic_recommendations(topics):
 
             score_percentage=mastery,
 
-            status=status
+            status=status,
         )
 
         # ----------------------------------------------------
-        # Topic priority
+        # Syllabus priority
         # ----------------------------------------------------
 
         priority = (
-            topic.get("priority")
+            topic.get(
+                "priority"
+            )
             or "MEDIUM"
         )
 
-        priority = str(
-            priority
-        ).strip().upper()
+        priority = (
+            str(priority)
+            .strip()
+            .upper()
+        )
 
         base_score = {
+
             "HIGH": 3.0,
+
             "MEDIUM": 2.0,
+
             "LOW": 1.0,
+
         }.get(
             priority,
             1.0
@@ -369,15 +396,24 @@ def build_topic_recommendations(topics):
 
         adaptive_topics.append(
             {
-                "topic": topic["name"],
 
-                "topic_data": topic,
+                "topic":
+                    topic.get(
+                        "name",
+                        "Unknown Topic"
+                    ),
 
-                "progress": progress,
+                "topic_data":
+                    topic,
 
-                "base_score": base_score,
+                "progress":
+                    progress,
 
-                "quiz_stats": quiz_stats,
+                "base_score":
+                    base_score,
+
+                "quiz_stats":
+                    quiz_stats,
 
                 "recent_performance":
                     recent_performance,
@@ -388,7 +424,7 @@ def build_topic_recommendations(topics):
         )
 
     # ========================================================
-    # CALCULATE ADAPTIVE SCORES
+    # CALCULATE SCORES + ACTIONS
     # ========================================================
 
     for topic in adaptive_topics:
@@ -399,14 +435,38 @@ def build_topic_recommendations(topics):
             )
         )
 
+        action_info = (
+            get_adaptive_action(
+                topic["progress"]
+            )
+        )
+
+        topic["action"] = action_info
+
+        topic["action_priority"] = (
+            action_info["priority"]
+        )
+
+        topic["action_message"] = (
+            action_info["message"]
+        )
+
     # ========================================================
-    # SORT BY LEARNING NEED
+    # SORT
     # ========================================================
 
     adaptive_topics.sort(
-        key=lambda item: item[
-            "adaptive_score"
-        ],
+
+        key=lambda item: (
+
+            item["adaptive_score"],
+
+            item["base_score"],
+
+            item["progress"].score_percentage * -1,
+
+        ),
+
         reverse=True
     )
 
@@ -417,11 +477,9 @@ def build_topic_recommendations(topics):
 # TOP RECOMMENDATION
 # ============================================================
 
-def get_top_recommendation(topics):
-    """
-    Return the single topic that currently needs
-    the most attention.
-    """
+def get_top_recommendation(
+    topics
+):
 
     recommendations = (
         build_topic_recommendations(
@@ -434,26 +492,28 @@ def get_top_recommendation(topics):
 
     top = recommendations[0]
 
-    progress = top["progress"]
-
-    action = get_adaptive_action(
-        progress
-    )
-
     return {
-        "topic": top["topic"],
+
+        "topic":
+            top["topic"],
 
         "topic_data":
             top["topic_data"],
 
         "progress":
-            progress,
+            top["progress"],
 
         "adaptive_score":
             top["adaptive_score"],
 
         "action":
-            action,
+            top["action"],
+
+        "action_priority":
+            top["action_priority"],
+
+        "action_message":
+            top["action_message"],
 
         "quiz_stats":
             top["quiz_stats"],

@@ -1,82 +1,399 @@
 import json
+import re
 
 from src.ai.client import ai_client
 
 from src.ai.prompts import (
     SYLLABUS_ANALYSIS_SYSTEM_PROMPT,
-    build_syllabus_analysis_prompt
+    build_syllabus_analysis_prompt,
 )
 
 from src.ai.syllabus_schema import (
-    SyllabusAnalysis
+    SyllabusAnalysis,
 )
 
+# ============================================================
+# GEMINI SYLLABUS RESPONSE SCHEMA
+# ============================================================
+
+SYLLABUS_RESPONSE_SCHEMA = {
+
+    "type": "object",
+
+    "required": [
+        "subject",
+        "overview",
+        "topics",
+    ],
+
+    "properties": {
+
+        "subject": {
+            "type": "string",
+        },
+
+        "overview": {
+            "type": "string",
+        },
+
+        "topics": {
+
+            "type": "array",
+
+            "items": {
+
+                "type": "object",
+
+                "required": [
+                    "topic",
+                    "unit",
+                    "priority",
+                    "reason",
+                    "estimated_minutes",
+                    "prerequisites",
+                ],
+
+                "properties": {
+
+                    "topic": {
+                        "type": "string",
+                    },
+
+                    "unit": {
+                        "type": "string",
+                    },
+
+                    "priority": {
+
+                        "type": "string",
+
+                        "enum": [
+                            "HIGH",
+                            "MEDIUM",
+                            "LOW",
+                        ],
+                    },
+
+                    "reason": {
+                        "type": "string",
+                    },
+
+                    "estimated_minutes": {
+
+                        "type": "integer",
+
+                        "minimum": 15,
+
+                        "maximum": 300,
+                    },
+
+                    "prerequisites": {
+
+                        "type": "array",
+
+                        "items": {
+                            "type": "string",
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
 
 # ============================================================
 # CLEAN AI RESPONSE
 # ============================================================
 
 def clean_json_response(response: str) -> str:
+    """
+    Extract the most likely JSON object from an AI response.
+
+    Handles:
+        - Normal JSON
+        - ```json ... ```
+        - ``` ... ```
+        - Extra text before JSON
+        - Extra text after JSON
+
+    IMPORTANT:
+    This function does NOT parse JSON.
+    It only extracts the candidate JSON string.
+    """
+
+    if response is None:
+        raise ValueError(
+            "AI returned an empty response."
+        )
+
+    response = str(response).strip()
 
     if not response:
         raise ValueError(
             "AI returned an empty response."
         )
 
+    # --------------------------------------------------------
+    # Remove Markdown code fences
+    # --------------------------------------------------------
+
+    response = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        response,
+        flags=re.IGNORECASE,
+    )
+
+    response = re.sub(
+        r"\s*```$",
+        "",
+        response,
+    )
+
     response = response.strip()
 
-    # Remove Markdown code fences
-    if response.startswith("```json"):
-
-        response = response[
-            len("```json"):
-        ].strip()
-
-    elif response.startswith("```"):
-
-        response = response[
-            len("```"):
-        ].strip()
-
-    if response.endswith("```"):
-
-        response = response[
-            :-3
-        ].strip()
-
     # --------------------------------------------------------
-    # Handle accidental text before/after JSON
+    # Find first JSON object
     # --------------------------------------------------------
 
     start = response.find("{")
-    end = response.rfind("}")
 
-    if start == -1 or end == -1:
-
+    if start == -1:
         raise ValueError(
-            "AI response does not contain valid JSON."
+            "AI response does not contain a JSON object."
         )
 
-    response = response[
-        start:end + 1
-    ]
+    # --------------------------------------------------------
+    # Find matching closing brace.
+    #
+    # We do NOT simply use rfind("}") because the AI may
+    # have added additional text after the JSON.
+    # --------------------------------------------------------
 
-    return response
+    depth = 0
+    in_string = False
+    escaped = False
+    end = None
 
+    for index in range(
+        start,
+        len(response),
+    ):
+
+        char = response[index]
+
+        # Handle escaped characters inside strings
+        if escaped:
+
+            escaped = False
+            continue
+
+        if char == "\\" and in_string:
+
+            escaped = True
+            continue
+
+        if char == '"':
+
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if char == "{":
+
+            depth += 1
+
+        elif char == "}":
+
+            depth -= 1
+
+            if depth == 0:
+
+                end = index
+
+                break
+
+    # --------------------------------------------------------
+    # Complete JSON object found
+    # --------------------------------------------------------
+
+    if end is not None:
+
+        return response[
+            start:end + 1
+        ].strip()
+
+    # --------------------------------------------------------
+    # JSON object is incomplete/truncated
+    #
+    # Return everything from { onward.
+    #
+    # The caller can then send it to the repair AI.
+    # --------------------------------------------------------
+
+    return response[
+        start:
+    ].strip()
+
+
+# ============================================================
+# PARSE JSON RESPONSE
+# ============================================================
+
+def parse_json_response(response: str):
+
+    cleaned = clean_json_response(
+        response
+    )
+
+    try:
+
+        return json.loads(
+            cleaned
+        )
+
+    except json.JSONDecodeError as error:
+
+        raise ValueError(
+            "AI returned malformed JSON.\n\n"
+            f"JSON error:\n{error}\n\n"
+            f"AI response:\n{cleaned}"
+        ) from error
+
+
+# ============================================================
+# BUILD JSON REPAIR PROMPT
+# ============================================================
+
+def build_json_repair_prompt(
+    subject_name,
+    syllabus,
+    exam_date,
+    daily_hours,
+):
+    """
+    Regenerate the syllabus analysis from the original
+    syllabus instead of attempting to repair malformed JSON.
+    """
+
+    return f"""
+Generate a NEW syllabus analysis from the original syllabus.
+
+IMPORTANT:
+
+The previous AI response was invalid.
+
+DO NOT attempt to repair or copy the previous response.
+
+Use ONLY the original syllabus below.
+
+Subject:
+{subject_name}
+
+Exam Date:
+{exam_date}
+
+Available Study Time:
+{daily_hours} hours
+
+
+ORIGINAL SYLLABUS
+================
+
+{syllabus}
+
+
+STRICT RULES
+============
+
+1. Extract only topics actually present in the syllabus.
+
+2. Do NOT invent missing topics.
+
+3. Do NOT create topics labelled "Missing".
+
+4. Do NOT add textbook topics.
+
+5. Do NOT add topics based on your own knowledge.
+
+6. Extract every meaningful topic present in the
+   supplied syllabus.
+
+7. Preserve the original unit names.
+
+8. Every topic must contain:
+
+   topic
+   unit
+   priority
+   reason
+   estimated_minutes
+   prerequisites
+
+9. priority MUST be exactly one of:
+
+   HIGH
+   MEDIUM
+   LOW
+
+10. estimated_minutes MUST be an integer.
+
+11. estimated_minutes MUST be between 15 and 300.
+
+12. prerequisites MUST be an array of strings.
+
+13. If a topic has no prerequisite:
+
+    []
+
+14. Do not put objects inside prerequisites.
+
+15. Do not duplicate topics.
+
+16. Do not invent prerequisites.
+
+17. Return ONLY JSON.
+
+18. Return one complete JSON object.
+
+19. Do not use Markdown.
+
+20. Do not use code fences.
+
+21. Do not add explanations.
+
+22. The JSON must be complete.
+
+23. The subject must be:
+
+{subject_name}
+
+Return the complete syllabus analysis.
+"""
 
 # ============================================================
 # VALIDATE BASIC ANALYSIS QUALITY
 # ============================================================
 
 def validate_analysis_quality(
-    analysis: SyllabusAnalysis
+    analysis: SyllabusAnalysis,
 ):
+
+    # --------------------------------------------------------
+    # Check topics
+    # --------------------------------------------------------
 
     if not analysis.topics:
 
         raise ValueError(
             "Syllabus analysis returned no topics."
         )
+
+    # --------------------------------------------------------
+    # Detect duplicate topics
+    # --------------------------------------------------------
 
     topic_names = set()
 
@@ -87,6 +404,12 @@ def validate_analysis_quality(
             .strip()
             .lower()
         )
+
+        if not normalized_name:
+
+            raise ValueError(
+                "Syllabus contains an empty topic name."
+            )
 
         if normalized_name in topic_names:
 
@@ -100,13 +423,40 @@ def validate_analysis_quality(
         )
 
         # ----------------------------------------------------
+        # Validate unit
+        # ----------------------------------------------------
+
+        if not topic.unit.strip():
+
+            raise ValueError(
+                f"Topic '{topic.topic}' "
+                "does not contain a valid unit."
+            )
+
+        # ----------------------------------------------------
+        # Validate priority
+        # ----------------------------------------------------
+
+        if topic.priority not in {
+            "HIGH",
+            "MEDIUM",
+            "LOW",
+        }:
+
+            raise ValueError(
+                f"Invalid priority for "
+                f"{topic.topic}: "
+                f"{topic.priority}"
+            )
+
+        # ----------------------------------------------------
         # Validate estimated time
         # ----------------------------------------------------
 
         if not (
             15
             <= topic.estimated_minutes
-            <= 600
+            <= 300
         ):
 
             raise ValueError(
@@ -116,55 +466,263 @@ def validate_analysis_quality(
             )
 
         # ----------------------------------------------------
-        # Validate prerequisite references
+        # Validate prerequisites
         # ----------------------------------------------------
+
+        if topic.prerequisites is None:
+
+            raise ValueError(
+                f"Prerequisites cannot be None "
+                f"for topic: {topic.topic}"
+            )
 
         for prerequisite in topic.prerequisites:
 
-            if prerequisite.strip().lower() == normalized_name:
+            if not isinstance(
+                prerequisite,
+                str,
+            ):
 
                 raise ValueError(
-                    f"Topic cannot be its own prerequisite: "
+                    f"Invalid prerequisite for "
                     f"{topic.topic}"
+                )
+
+            if (
+                prerequisite.strip().lower()
+                == normalized_name
+            ):
+
+                raise ValueError(
+                    "Topic cannot be its own "
+                    f"prerequisite: {topic.topic}"
                 )
 
 
 # ============================================================
-# ANALYZE SYLLABUS
+# VALIDATE AI RESPONSE
 # ============================================================
 
-def analyze_syllabus(
+def validate_ai_response(response):
+
+    # --------------------------------------------------------
+    # Attempt cleaning
+    # --------------------------------------------------------
+
+    try:
+
+        cleaned = clean_json_response(
+            response
+        )
+
+    except ValueError as error:
+
+        return None, str(error)
+
+    # --------------------------------------------------------
+    # Attempt JSON parsing
+    # --------------------------------------------------------
+
+    try:
+
+        data = json.loads(
+            cleaned
+        )
+
+    except json.JSONDecodeError as error:
+
+        return None, (
+            "AI returned malformed JSON.\n\n"
+            f"JSON error:\n{error}\n\n"
+            f"AI response:\n{cleaned}"
+        )
+
+    # --------------------------------------------------------
+    # Basic object validation
+    # --------------------------------------------------------
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+
+        return None, (
+            "AI response must be a JSON object."
+        )
+
+    # --------------------------------------------------------
+    # Required fields
+    # --------------------------------------------------------
+
+    required_fields = [
+        "subject",
+        "overview",
+        "topics",
+    ]
+
+    for field in required_fields:
+
+        if field not in data:
+
+            return None, (
+                f"AI response is missing "
+                f"'{field}'."
+            )
+
+    # --------------------------------------------------------
+    # Validate subject
+    # --------------------------------------------------------
+
+    if not isinstance(
+        data["subject"],
+        str,
+    ):
+
+        return None, (
+            "AI response 'subject' "
+            "must be a string."
+        )
+
+    # --------------------------------------------------------
+    # Validate overview
+    # --------------------------------------------------------
+
+    if not isinstance(
+        data["overview"],
+        str,
+    ):
+
+        return None, (
+            "AI response 'overview' "
+            "must be a string."
+        )
+
+    # --------------------------------------------------------
+    # Validate topics
+    # --------------------------------------------------------
+
+    if not isinstance(
+        data["topics"],
+        list,
+    ):
+
+        return None, (
+            "AI response 'topics' "
+            "must be a list."
+        )
+
+    if not data["topics"]:
+
+        return None, (
+            "AI response contains no topics."
+        )
+
+    # --------------------------------------------------------
+    # Validate topic structures before Pydantic
+    # --------------------------------------------------------
+
+    required_topic_fields = [
+        "topic",
+        "unit",
+        "priority",
+        "reason",
+        "estimated_minutes",
+        "prerequisites",
+    ]
+
+    for index, topic in enumerate(
+        data["topics"],
+        start=1,
+    ):
+
+        if not isinstance(
+            topic,
+            dict,
+        ):
+
+            return None, (
+                f"Topic {index} must be "
+                "a JSON object."
+            )
+
+        for field in required_topic_fields:
+
+            if field not in topic:
+
+                return None, (
+                    f"Topic {index} is missing "
+                    f"'{field}'."
+                )
+
+        if not isinstance(
+            topic["prerequisites"],
+            list,
+        ):
+
+            return None, (
+                f"Topic {index} "
+                "'prerequisites' must be "
+                "a list."
+            )
+
+        if topic["priority"] not in {
+            "HIGH",
+            "MEDIUM",
+            "LOW",
+        }:
+
+            return None, (
+                f"Topic {index} has invalid "
+                f"priority: {topic['priority']}"
+            )
+
+        try:
+
+            estimated_minutes = int(
+                topic["estimated_minutes"]
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            return None, (
+                f"Topic {index} has invalid "
+                "estimated_minutes."
+            )
+
+        if not (
+            15
+            <= estimated_minutes
+            <= 300
+        ):
+
+            return None, (
+                f"Topic {index} has invalid "
+                f"estimated_minutes: "
+                f"{estimated_minutes}"
+            )
+
+        # Normalize integer in case the AI returned
+        # a numeric value that can safely be converted.
+        topic[
+            "estimated_minutes"
+        ] = estimated_minutes
+
+    return data, None
+
+
+# ============================================================
+# BUILD MAIN ANALYSIS PROMPT
+# ============================================================
+
+def build_analysis_prompt(
     subject_name,
     syllabus,
     exam_date,
-    daily_hours
+    daily_hours,
 ):
-
-    # --------------------------------------------------------
-    # Basic validation
-    # --------------------------------------------------------
-
-    if not subject_name.strip():
-
-        raise ValueError(
-            "Subject name cannot be empty."
-        )
-
-    if not syllabus.strip():
-
-        raise ValueError(
-            "Syllabus cannot be empty."
-        )
-
-    if daily_hours <= 0:
-
-        raise ValueError(
-            "Daily study hours must be greater than zero."
-        )
-
-    # --------------------------------------------------------
-    # Build user prompt
-    # --------------------------------------------------------
 
     user_prompt = build_syllabus_analysis_prompt(
 
@@ -174,14 +732,10 @@ def analyze_syllabus(
 
         exam_date=exam_date,
 
-        daily_hours=daily_hours
+        daily_hours=daily_hours,
     )
 
-    # --------------------------------------------------------
-    # Complete AI prompt
-    # --------------------------------------------------------
-
-    prompt = f"""
+    return f"""
 {SYLLABUS_ANALYSIS_SYSTEM_PROMPT}
 
 {user_prompt}
@@ -200,27 +754,26 @@ IMPORTANT ANALYSIS REQUIREMENTS:
 
 6. Keep topic names concise but descriptive.
 
-7. Preserve the original unit names whenever possible.
+7. Preserve original unit names whenever possible.
 
 8. Priority MUST be exactly:
-
    HIGH
    MEDIUM
    LOW
 
-9. HIGH priority should be assigned to:
+9. HIGH priority:
    - foundational concepts
    - major theoretical concepts
    - concepts required by later topics
-   - topics likely to require more understanding
+   - concepts requiring deeper understanding
    - important examination concepts
 
-10. MEDIUM priority should be assigned to:
+10. MEDIUM priority:
     - important supporting concepts
     - moderate-complexity concepts
-    - topics that depend on foundational concepts
+    - topics dependent on foundational concepts
 
-11. LOW priority should be assigned only to:
+11. LOW priority:
     - less central topics
     - supplementary concepts
     - topics that can reasonably be studied later
@@ -230,19 +783,12 @@ IMPORTANT ANALYSIS REQUIREMENTS:
 13. Do NOT assign the same study time to every topic unless
     the topics genuinely require similar effort.
 
-14. Use the following approximate ranges:
+14. Approximate ranges:
 
-    Simple topic:
-    20-40 minutes
-
-    Moderate topic:
-    40-75 minutes
-
-    Complex topic:
-    75-120 minutes
-
-    Very complex topic:
-    120-180 minutes
+    Simple: 20-40 minutes
+    Moderate: 40-75 minutes
+    Complex: 75-120 minutes
+    Very complex: 120-180 minutes
 
 15. estimated_minutes MUST be an integer.
 
@@ -257,16 +803,16 @@ IMPORTANT ANALYSIS REQUIREMENTS:
 
 20. Do NOT invent prerequisites unnecessarily.
 
-21. The overview must summarize the entire syllabus.
+21. overview must summarize the entire syllabus.
 
-22. The subject field must contain:
+22. subject MUST contain:
 
     {subject_name}
 
 23. Do NOT invent past-exam frequency.
 
 24. Do NOT claim that a topic is frequently asked unless
-    actual past-exam data has been provided.
+    actual past-exam data was provided.
 
 25. Return ONLY valid JSON.
 
@@ -274,15 +820,25 @@ IMPORTANT ANALYSIS REQUIREMENTS:
 
 27. Do NOT use ```json.
 
-28. Do NOT add any explanation outside the JSON.
+28. Do NOT add explanations outside JSON.
+
+29. Return the COMPLETE JSON object.
+
+30. Do NOT stop in the middle of the topics array.
+
+31. Make sure every opening brace, bracket, and quotation
+    mark has a matching closing character.
+
+32. Keep the response concise enough to fit completely within
+    the model's output limit.
+
+33. Do not generate unnecessary descriptions.
 
 RETURN EXACTLY THIS STRUCTURE:
 
 {{
     "subject": "{subject_name}",
-
     "overview": "Brief summary of the complete syllabus",
-
     "topics": [
         {{
             "topic": "Example Topic",
@@ -296,48 +852,214 @@ RETURN EXACTLY THIS STRUCTURE:
 }}
 """
 
-    # --------------------------------------------------------
-    # Call AI
-    # --------------------------------------------------------
+# ============================================================
+# ANALYZE SYLLABUS
+# ============================================================
 
-    response = ai_client.generate(
-        prompt
-    )
-
-    # --------------------------------------------------------
-    # Clean response
-    # --------------------------------------------------------
-
-    response = clean_json_response(
-        response
-    )
+def analyze_syllabus(
+    subject_name,
+    syllabus,
+    exam_date,
+    daily_hours,
+):
 
     # --------------------------------------------------------
-    # Check JSON syntax before Pydantic
+    # Basic validation
     # --------------------------------------------------------
+
+    if not subject_name or not subject_name.strip():
+
+        raise ValueError(
+            "Subject name cannot be empty."
+        )
+
+    if not syllabus or not syllabus.strip():
+
+        raise ValueError(
+            "Syllabus cannot be empty."
+        )
 
     try:
 
-        json.loads(response)
+        daily_hours = float(
+            daily_hours
+        )
 
-    except json.JSONDecodeError as error:
+    except (
+        TypeError,
+        ValueError,
+    ):
 
         raise ValueError(
-            "AI returned malformed JSON.\n\n"
-            f"JSON error:\n{error}\n\n"
-            f"AI response:\n{response}"
+            "Daily study hours must be a valid number."
+        )
+
+    if daily_hours <= 0:
+
+        raise ValueError(
+            "Daily study hours must be greater than zero."
         )
 
     # --------------------------------------------------------
-    # Validate with Pydantic
+    # Build prompt
     # --------------------------------------------------------
+
+    prompt = build_analysis_prompt(
+
+        subject_name=subject_name,
+
+        syllabus=syllabus,
+
+        exam_date=exam_date,
+
+        daily_hours=daily_hours,
+    )
+
+    # ========================================================
+    # FIRST AI ATTEMPT
+    # ========================================================
+
+    response = ai_client.generate_json(
+
+        prompt,
+
+        response_schema=SYLLABUS_RESPONSE_SCHEMA,
+    )
+    if is_non_analysis_response(response):
+
+        print(
+            "⚠️ AI provider returned a non-analysis response."
+        )
+
+        print(
+            f"Provider response: {response}"
+        )
+    # ========================================================
+    # DEBUG INFORMATION
+    # ========================================================
+
+    print(
+        "\n========== SYLLABUS AI RESPONSE =========="
+    )
+
+    print(
+        str(response)[:5000]
+    )
+
+    print(
+        "==========================================\n"
+    )
+
+    # ========================================================
+    # FIRST VALIDATION
+    # ========================================================
+
+    data, error_message = (
+        validate_ai_response(
+            response
+        )
+    )
+
+    # ========================================================
+    # REPAIR ATTEMPT
+    # ========================================================
+
+    if data is None:
+
+        print(
+            "⚠️ First syllabus AI response "
+            "was invalid."
+        )
+
+        print(
+            f"Reason: {error_message}"
+        )
+
+        repair_prompt = (
+            build_json_repair_prompt(
+
+                malformed_response=response,
+
+                subject_name=subject_name,
+
+                syllabus=syllabus,
+
+                exam_date=exam_date,
+
+                daily_hours=daily_hours,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Generate repaired response
+        # ----------------------------------------------------
+
+        repaired_response = (
+            ai_client.generate_json(
+
+                repair_prompt,
+
+                response_schema=SYLLABUS_RESPONSE_SCHEMA,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Debug repaired response
+        # ----------------------------------------------------
+
+        print(
+            "\n========== REPAIRED AI RESPONSE =========="
+        )
+
+        print(
+            str(repaired_response)[:5000]
+        )
+
+        print(
+            "==========================================\n"
+        )
+
+        # ----------------------------------------------------
+        # Validate repaired response
+        # ----------------------------------------------------
+
+        data, repair_error = (
+            validate_ai_response(
+                repaired_response
+            )
+        )
+
+        if data is None:
+
+            raise ValueError(
+                "AI returned malformed syllabus JSON "
+                "after repair attempt.\n\n"
+
+                f"Initial error:\n"
+                f"{error_message}\n\n"
+
+                f"Repair error:\n"
+                f"{repair_error}\n\n"
+
+                f"Initial AI response:\n"
+                f"{response}\n\n"
+
+                f"Repaired AI response:\n"
+                f"{repaired_response}"
+            )
+
+        response = repaired_response
+
+    # ========================================================
+    # PYDANTIC VALIDATION
+    # ========================================================
 
     try:
 
         analysis = (
             SyllabusAnalysis
-            .model_validate_json(
-                response
+            .model_validate(
+                data
             )
         )
 
@@ -347,14 +1069,46 @@ RETURN EXACTLY THIS STRUCTURE:
             "AI returned invalid syllabus data.\n\n"
             f"Validation error:\n{error}\n\n"
             f"AI response:\n{response}"
-        )
+        ) from error
 
-    # --------------------------------------------------------
-    # Validate analysis quality
-    # --------------------------------------------------------
+    # ========================================================
+    # QUALITY VALIDATION
+    # ========================================================
 
     validate_analysis_quality(
         analysis
     )
 
+    # ========================================================
+    # RETURN FINAL ANALYSIS
+    # ========================================================
+
     return analysis
+def is_non_analysis_response(response):
+    """
+    Detect responses that clearly are not syllabus analysis.
+
+    This prevents provider/status/safety messages from
+    being treated as a legitimate AI response.
+    """
+
+    if response is None:
+        return True
+
+    text = str(response).strip().lower()
+
+    if not text:
+        return True
+
+    blocked_patterns = [
+        "user safety:",
+        "safety classification:",
+        "safety: safe",
+        "safety: unsafe",
+        "content safety:",
+    ]
+
+    return any(
+        pattern in text
+        for pattern in blocked_patterns
+    )

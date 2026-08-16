@@ -1,4 +1,10 @@
 # ============================================================
+# MY SUBJECTS
+# StudyFlow AI
+# Phase 11.1 - UI/UX Polish
+# ============================================================
+
+# ============================================================
 # PROJECT ROOT FIX
 # ============================================================
 
@@ -23,11 +29,12 @@ from src.database.repository import (
     create_student,
     create_subject,
     get_student,
+    get_student_by_name,
     get_subjects,
     update_subject,
     delete_subject,
     create_topic,
-    get_topics
+    get_topics,
 )
 
 from src.ai.syllabus_analyzer import analyze_syllabus
@@ -38,9 +45,9 @@ from src.ai.syllabus_analyzer import analyze_syllabus
 # ============================================================
 
 st.set_page_config(
-    page_title="My Subjects",
+    page_title="My Subjects | StudyFlow AI",
     page_icon="📚",
-    layout="wide"
+    layout="wide",
 )
 
 
@@ -52,30 +59,102 @@ initialize_database()
 
 
 # ============================================================
-# STUDENT SETUP
+# SESSION STATE HELPERS
 # ============================================================
 
-def get_or_create_student():
+def clear_syllabus_analysis():
+    """
+    Clear cached syllabus analysis from session state.
+    """
 
-    # Reuse student stored in Streamlit session
-    if "student_id" in st.session_state:
+    st.session_state.pop(
+        "syllabus_analysis",
+        None,
+    )
+
+    st.session_state.pop(
+        "syllabus_analysis_subject_id",
+        None,
+    )
+
+
+def get_or_create_student():
+    """
+    Reuse the current student whenever possible.
+
+    Priority:
+        1. Valid student_id from session
+        2. Stored student_name
+        3. Existing default Student
+        4. Create default Student
+    """
+
+    # --------------------------------------------------------
+    # Existing session student
+    # --------------------------------------------------------
+
+    student_id = st.session_state.get(
+        "student_id"
+    )
+
+    if student_id is not None:
 
         student = get_student(
-            st.session_state.student_id
+            student_id
         )
 
         if student:
 
+            st.session_state.student_name = (
+                student["name"]
+            )
+
             return student["id"]
 
-        # Stored ID is invalid
         st.session_state.pop(
             "student_id",
-            None
+            None,
         )
 
-    # Try to use existing default student
-    student = get_student(1)
+
+    # --------------------------------------------------------
+    # Existing student name
+    # --------------------------------------------------------
+
+    student_name = (
+        st.session_state.get(
+            "student_name",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if student_name:
+
+        student = get_student_by_name(
+            student_name
+        )
+
+        if student:
+
+            st.session_state.student_id = (
+                student["id"]
+            )
+
+            st.session_state.student_name = (
+                student["name"]
+            )
+
+            return student["id"]
+
+
+    # --------------------------------------------------------
+    # Existing default student
+    # --------------------------------------------------------
+
+    student = get_student_by_name(
+        "Student"
+    )
 
     if student:
 
@@ -83,20 +162,36 @@ def get_or_create_student():
             student["id"]
         )
 
+        st.session_state.student_name = (
+            student["name"]
+        )
+
         return student["id"]
 
-    # Create student if none exists
+
+    # --------------------------------------------------------
+    # Create default student
+    # --------------------------------------------------------
+
     student_id = create_student(
         name="Student",
-        knowledge_level="Beginner"
+        knowledge_level="Beginner",
     )
 
     st.session_state.student_id = (
         student_id
     )
 
+    st.session_state.student_name = (
+        "Student"
+    )
+
     return student_id
 
+
+# ============================================================
+# STUDENT
+# ============================================================
 
 student_id = get_or_create_student()
 
@@ -108,9 +203,11 @@ student_id = get_or_create_student()
 st.title("📚 My Subjects")
 
 st.write(
-    "Manage your subjects and analyze your syllabus "
-    "with StudyFlow AI."
+    "Manage your subjects, analyze syllabi, and build "
+    "your personalized learning path with StudyFlow AI."
 )
+
+st.divider()
 
 
 # ============================================================
@@ -119,14 +216,30 @@ st.write(
 
 with st.expander(
     "➕ Add New Subject",
-    expanded=True
+    expanded=not bool(
+        st.session_state.get(
+            "selected_subject_id"
+        )
+    ),
 ):
 
-    with st.form("add_subject_form"):
+    with st.form(
+        "add_subject_form",
+        clear_on_submit=True,
+    ):
+
+        st.markdown(
+            "### Create a subject"
+        )
+
+        st.caption(
+            "Add your subject details so StudyFlow can "
+            "generate a personalized learning structure."
+        )
 
         name = st.text_input(
             "Subject Name",
-            placeholder="e.g. Computer Linguistics"
+            placeholder="e.g. Computational Linguistics",
         )
 
         col1, col2 = st.columns(2)
@@ -144,25 +257,31 @@ with st.expander(
                 min_value=0.5,
                 max_value=12.0,
                 value=2.0,
-                step=0.5
+                step=0.5,
             )
 
         goal = st.text_area(
             "Study Goal",
             placeholder=(
-                "Example: Understand all units "
-                "and prepare for the final exam."
-            )
+                "Example: Understand all units and "
+                "prepare for the final examination."
+            ),
+            height=100,
         )
 
         submitted = st.form_submit_button(
             "➕ Add Subject",
-            type="primary"
+            type="primary",
+            use_container_width=True,
         )
 
         if submitted:
 
-            if not name.strip():
+            cleaned_name = (
+                name or ""
+            ).strip()
+
+            if not cleaned_name:
 
                 st.error(
                     "Please enter a subject name."
@@ -170,177 +289,209 @@ with st.expander(
 
             else:
 
-                subject_id = create_subject(
-                    student_id=student_id,
-                    name=name.strip(),
-                    exam_date=str(exam_date),
-                    daily_hours=daily_hours,
-                    goal=goal.strip()
-                )
+                try:
 
-                st.session_state.selected_subject_id = (
-                    subject_id
-                )
+                    subject_id = create_subject(
+                        student_id=student_id,
+                        name=cleaned_name,
+                        exam_date=str(exam_date),
+                        daily_hours=daily_hours,
+                        goal=(goal or "").strip(),
+                    )
 
-                # Clear old syllabus analysis
-                st.session_state.pop(
-                    "syllabus_analysis",
-                    None
-                )
+                    st.session_state.selected_subject_id = (
+                        subject_id
+                    )
 
-                st.session_state.pop(
-                    "syllabus_analysis_subject_id",
-                    None
-                )
+                    clear_syllabus_analysis()
 
-                st.success(
-                    f"'{name}' added successfully!"
-                )
+                    st.session_state[
+                        "syllabus_saved"
+                    ] = False
 
-                st.rerun()
+                    st.success(
+                        f"'{cleaned_name}' was added successfully."
+                    )
+
+                    st.rerun()
+
+                except Exception as error:
+
+                    st.error(
+                        "Unable to create the subject."
+                    )
+
+                    st.exception(error)
 
 
 # ============================================================
-# EXISTING SUBJECTS
+# LOAD SUBJECTS
 # ============================================================
 
-st.divider()
+subjects = get_subjects(
+    student_id
+)
+
+
+# ============================================================
+# SUBJECT LIST
+# ============================================================
 
 st.subheader("📖 Your Subjects")
-
-subjects = get_subjects(student_id)
-
 
 if not subjects:
 
     st.info(
         "You haven't added any subjects yet. "
-        "Use 'Add New Subject' above."
+        "Use **Add New Subject** above to get started."
+    )
+
+else:
+
+    st.caption(
+        f"{len(subjects)} subject(s) available"
     )
 
 
-for subject in subjects:
+    for subject in subjects:
 
-    with st.container(border=True):
+        subject_id = subject["id"]
 
-        col1, col2, col3 = st.columns(
-            [5, 2, 2]
-        )
+        with st.container(
+            border=True
+        ):
 
-        # ----------------------------------------------------
-        # SUBJECT INFORMATION
-        # ----------------------------------------------------
-
-        with col1:
-
-            st.markdown(
-                f"### 📘 {subject['name']}"
+            info_col, action_col = st.columns(
+                [7, 2]
             )
 
-            st.write(
-                f"📅 Exam Date: "
-                f"{subject['exam_date']}"
-            )
+            # ------------------------------------------------
+            # SUBJECT INFORMATION
+            # ------------------------------------------------
 
-            st.write(
-                f"⏱️ Daily Study Time: "
-                f"{subject['daily_hours']} hours"
-            )
+            with info_col:
 
-            if subject["goal"]:
-
-                st.caption(
-                    f"🎯 Goal: {subject['goal']}"
+                st.markdown(
+                    f"### 📘 {subject['name']}"
                 )
 
-        # ----------------------------------------------------
-        # OPEN
-        # ----------------------------------------------------
+                meta_col1, meta_col2 = st.columns(2)
 
-        with col2:
+                with meta_col1:
 
-            if st.button(
-                "▶️ Open",
-                key=f"open_{subject['id']}",
-                use_container_width=True
-            ):
-
-                previous_subject = st.session_state.get(
-                    "selected_subject_id"
-                )
-
-                st.session_state.selected_subject_id = (
-                    subject["id"]
-                )
-
-                # Clear analysis when changing subject
-                if previous_subject != subject["id"]:
-
-                    st.session_state.pop(
-                        "syllabus_analysis",
-                        None
+                    st.write(
+                        f"📅 **Exam Date:** "
+                        f"{subject['exam_date']}"
                     )
 
-                    st.session_state.pop(
-                        "syllabus_analysis_subject_id",
-                        None
+                with meta_col2:
+
+                    st.write(
+                        f"⏱️ **Daily Study:** "
+                        f"{subject['daily_hours']} hour(s)"
                     )
 
-                st.rerun()
+                goal_value = (
+                    subject["goal"]
+                    if "goal" in subject.keys()
+                    else ""
+                ) or ""
 
-        # ----------------------------------------------------
-        # DELETE
-        # ----------------------------------------------------
+                goal_value = goal_value.strip()
 
-        with col3:
+                if goal_value:
 
-            if st.button(
-                "🗑️ Delete",
-                key=f"delete_{subject['id']}",
-                use_container_width=True
-            ):
-
-                delete_subject(
-                    subject["id"]
-                )
-
-                if (
-                    st.session_state.get(
-                        "selected_subject_id"
+                    st.caption(
+                        f"🎯 Goal: {goal_value}"
                     )
-                    == subject["id"]
+
+            # ------------------------------------------------
+            # ACTIONS
+            # ------------------------------------------------
+
+            with action_col:
+
+                if st.button(
+                    "▶️ Open",
+                    key=f"open_subject_{subject_id}",
+                    use_container_width=True,
                 ):
 
-                    st.session_state.pop(
-                        "selected_subject_id",
-                        None
+                    previous_subject = (
+                        st.session_state.get(
+                            "selected_subject_id"
+                        )
                     )
 
-                    st.session_state.pop(
-                        "syllabus_analysis",
-                        None
+                    st.session_state.selected_subject_id = (
+                        subject_id
                     )
 
-                    st.session_state.pop(
-                        "syllabus_analysis_subject_id",
-                        None
-                    )
+                    if previous_subject != subject_id:
 
-                st.rerun()
+                        clear_syllabus_analysis()
+
+                    st.session_state[
+                        "syllabus_saved"
+                    ] = False
+
+                    st.rerun()
+
+                if st.button(
+                    "🗑️ Delete",
+                    key=f"delete_subject_{subject_id}",
+                    use_container_width=True,
+                ):
+
+                    try:
+
+                        delete_subject(
+                            subject_id
+                        )
+
+                        if (
+                            st.session_state.get(
+                                "selected_subject_id"
+                            )
+                            == subject_id
+                        ):
+
+                            st.session_state.pop(
+                                "selected_subject_id",
+                                None,
+                            )
+
+                            clear_syllabus_analysis()
+
+                        st.success(
+                            f"'{subject['name']}' was deleted."
+                        )
+
+                        st.rerun()
+
+                    except Exception as error:
+
+                        st.error(
+                            "Unable to delete this subject."
+                        )
+
+                        st.exception(error)
 
 
 # ============================================================
 # SELECTED SUBJECT
 # ============================================================
 
-selected_subject_id = st.session_state.get(
-    "selected_subject_id"
+selected_subject_id = (
+    st.session_state.get(
+        "selected_subject_id"
+    )
 )
 
 selected_subject = None
 
 
-if selected_subject_id:
+if selected_subject_id is not None:
 
     selected_subject = next(
         (
@@ -348,63 +499,171 @@ if selected_subject_id:
             for subject in subjects
             if subject["id"] == selected_subject_id
         ),
-        None
+        None,
     )
 
 
 # ============================================================
-# SYLLABUS ANALYZER
+# SELECTED SUBJECT NOT FOUND
+# ============================================================
+
+if (
+    selected_subject_id is not None
+    and selected_subject is None
+):
+
+    st.session_state.pop(
+        "selected_subject_id",
+        None,
+    )
+
+    clear_syllabus_analysis()
+
+    st.info(
+        "The previously selected subject is no longer available."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# SELECTED SUBJECT WORKSPACE
 # ============================================================
 
 if selected_subject:
 
     st.divider()
 
+    st.header(
+        f"📘 {selected_subject['name']}"
+    )
+
+    st.caption(
+        "Selected subject workspace"
+    )
+
+
+    # ========================================================
+    # SUBJECT SUMMARY
+    # ========================================================
+
+    summary_col1, summary_col2, summary_col3 = (
+        st.columns(3)
+    )
+
+    with summary_col1:
+
+        st.metric(
+            "📅 Exam Date",
+            str(
+                selected_subject["exam_date"]
+            ),
+        )
+
+    with summary_col2:
+
+        st.metric(
+            "⏱️ Daily Study",
+            f"{selected_subject['daily_hours']} h",
+        )
+
+    with summary_col3:
+
+        current_topics = get_topics(
+            selected_subject["id"]
+        )
+
+        st.metric(
+            "📚 Topics",
+            len(current_topics),
+        )
+
+
+    subject_goal = (
+        selected_subject["goal"]
+        if "goal" in selected_subject.keys()
+        else ""
+    ) or ""
+
+    subject_goal = subject_goal.strip()
+
+    if subject_goal:
+
+        st.info(
+            f"🎯 **Study Goal:** {subject_goal}"
+        )
+
+
+    # ========================================================
+    # SYLLABUS ANALYZER
+    # ========================================================
+
+    st.divider()
+
     st.subheader(
-        "📄 Syllabus Analyzer"
+        "🧠 Syllabus Analyzer"
     )
 
     st.write(
-        f"Analyze the syllabus for "
-        f"**{selected_subject['name']}**."
+        "Paste your syllabus and StudyFlow AI will "
+        "identify units, topics, priorities, estimated "
+        "study time, and prerequisites."
     )
+
 
     st.markdown(
         """
         **StudyFlow AI will:**
 
-        🧠 Analyze the syllabus  
-        📚 Identify units and topics  
-        🎯 Assign topic priorities  
-        ⏱️ Estimate study time  
-        🔗 Identify prerequisites  
-        💾 Save topics to your subject
+        - 🧠 Analyze your syllabus
+        - 📚 Identify units and topics
+        - 🎯 Assign topic priorities
+        - ⏱️ Estimate study time
+        - 🔗 Identify prerequisites
+        - 💾 Save topics to your subject
         """
     )
 
+
+    # --------------------------------------------------------
+    # Syllabus input
+    # --------------------------------------------------------
+
     syllabus = st.text_area(
-        "Paste your syllabus below",
-        height=350,
+        "Paste your syllabus",
+        height=300,
         placeholder=(
             "Example:\n\n"
             "Unit-I: Introduction\n"
             "Words, Regular Expressions and Automata...\n\n"
             "Unit-II: Syntax\n"
-            "N-gram models of Syntax..."
+            "N-gram models of Syntax...\n\n"
+            "Unit-III: Semantics\n"
+            "Semantic representation and interpretation..."
         ),
-        key="syllabus_input"
+        key="syllabus_input",
     )
+
+
+    # --------------------------------------------------------
+    # Analyze
+    # --------------------------------------------------------
 
     if st.button(
         "🧠 Analyze Syllabus",
         type="primary",
-        use_container_width=True
+        use_container_width=True,
+        key="analyze_syllabus_button",
     ):
 
-        if not syllabus.strip():
+        cleaned_syllabus = (
+            syllabus or ""
+        ).strip()
+
+        if not cleaned_syllabus:
 
             st.warning(
-                "Please paste your syllabus first."
+                "Please paste your syllabus before analyzing it."
             )
 
         else:
@@ -421,7 +680,7 @@ if selected_subject:
                             selected_subject["name"]
                         ),
 
-                        syllabus=syllabus,
+                        syllabus=cleaned_syllabus,
 
                         exam_date=(
                             selected_subject["exam_date"]
@@ -429,22 +688,23 @@ if selected_subject:
 
                         daily_hours=(
                             selected_subject["daily_hours"]
-                        )
+                        ),
                     )
 
-                    # Save analysis
                     st.session_state[
                         "syllabus_analysis"
                     ] = analysis
 
-                    # VERY IMPORTANT:
-                    # Remember which subject was analyzed
                     st.session_state[
                         "syllabus_analysis_subject_id"
                     ] = selected_subject["id"]
 
+                    st.session_state[
+                        "syllabus_saved"
+                    ] = False
+
                     st.success(
-                        "✅ Syllabus analyzed successfully!"
+                        "✅ Syllabus analyzed successfully."
                     )
 
                     st.rerun()
@@ -452,449 +712,693 @@ if selected_subject:
                 except Exception as error:
 
                     st.error(
-                        "❌ Unable to analyze the syllabus."
+                        "Unable to analyze the syllabus."
+                    )
+
+                    st.caption(
+                        "Please check your AI provider configuration "
+                        "and try again."
                     )
 
                     st.exception(error)
 
 
-# ============================================================
-# GET CURRENT ANALYSIS
-# ============================================================
+    # ========================================================
+    # RECOVER ANALYSIS
+    # ========================================================
 
-analysis = st.session_state.get(
-    "syllabus_analysis"
-)
-
-analysis_subject_id = st.session_state.get(
-    "syllabus_analysis_subject_id"
-)
-
-
-# ============================================================
-# DISPLAY ANALYSIS
-# ============================================================
-
-if (
-    analysis
-    and selected_subject
-    and analysis_subject_id == selected_subject["id"]
-):
-
-    st.divider()
-
-    st.subheader(
-        "📊 Syllabus Analysis"
+    analysis = st.session_state.get(
+        "syllabus_analysis"
     )
 
-    # --------------------------------------------------------
-    # OVERVIEW
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### 📚 Subject Overview"
+    analysis_subject_id = (
+        st.session_state.get(
+            "syllabus_analysis_subject_id"
+        )
     )
 
-    st.info(
-        analysis.overview
-    )
 
     # --------------------------------------------------------
-    # SUMMARY METRICS
+    # Only display analysis for the subject that generated it.
     # --------------------------------------------------------
 
-    col1, col2 = st.columns(2)
+    if (
+        analysis is not None
+        and analysis_subject_id
+        == selected_subject["id"]
+    ):
 
-    with col1:
+        st.divider()
 
-        st.metric(
-            "📖 Topics Found",
-            len(analysis.topics)
+        st.subheader(
+            "📊 Syllabus Analysis"
         )
 
-    with col2:
+
+        # ====================================================
+        # ANALYSIS SUMMARY
+        # ====================================================
+
+        analysis_topics = (
+            getattr(
+                analysis,
+                "topics",
+                []
+            )
+            or []
+        )
+
+
+        total_topics = len(
+            analysis_topics
+        )
+
 
         total_minutes = sum(
-            topic.estimated_minutes
-            for topic in analysis.topics
+            int(
+                getattr(
+                    topic,
+                    "estimated_minutes",
+                    0
+                )
+                or 0
+            )
+            for topic in analysis_topics
         )
 
-        hours = total_minutes / 60
 
-        st.metric(
-            "⏱️ Estimated Total Time",
-            f"{total_minutes} min"
+        hours = (
+            total_minutes / 60
+            if total_minutes > 0
+            else 0
         )
 
-        st.caption(
-            f"Approximately {hours:.1f} hours"
-        )
 
-    st.divider()
+        summary_col1, summary_col2 = st.columns(2)
 
-    # --------------------------------------------------------
-    # TOPICS
-    # --------------------------------------------------------
+        with summary_col1:
 
-    st.subheader(
-        "📋 Topics Identified"
-    )
-
-    for index, topic in enumerate(
-        analysis.topics,
-        start=1
-    ):
-
-        with st.container(border=True):
-
-            st.markdown(
-                f"### {index}. {topic.topic}"
+            st.metric(
+                "📚 Topics Identified",
+                total_topics,
             )
 
-            col1, col2, col3 = st.columns(3)
+        with summary_col2:
 
-            # ------------------------------------------------
-            # UNIT
-            # ------------------------------------------------
-
-            with col1:
-
-                st.write(
-                    f"📘 **Unit:** "
-                    f"{topic.unit or 'Not specified'}"
-                )
-
-            # ------------------------------------------------
-            # PRIORITY
-            # ------------------------------------------------
-
-            with col2:
-
-                if topic.priority == "HIGH":
-
-                    priority_display = "🔥 HIGH"
-
-                elif topic.priority == "MEDIUM":
-
-                    priority_display = "🟡 MEDIUM"
-
-                else:
-
-                    priority_display = "🟢 LOW"
-
-                st.write(
-                    f"🎯 **Priority:** "
-                    f"{priority_display}"
-                )
-
-            # ------------------------------------------------
-            # TIME
-            # ------------------------------------------------
-
-            with col3:
-
-                st.write(
-                    f"⏱️ **Estimated:** "
-                    f"{topic.estimated_minutes} min"
-                )
-
-            # ------------------------------------------------
-            # REASON
-            # ------------------------------------------------
-
-            st.write(
-                f"💡 **Reason:** {topic.reason}"
+            st.metric(
+                "⏱️ Estimated Study Time",
+                f"{total_minutes} min",
             )
 
-            # ------------------------------------------------
-            # PREREQUISITES
-            # ------------------------------------------------
-
-            if topic.prerequisites:
-
-                st.write(
-                    "🔗 **Prerequisites:** "
-                    + ", ".join(
-                        topic.prerequisites
-                    )
-                )
-
-            else:
+            if total_minutes > 0:
 
                 st.caption(
-                    "🔗 Prerequisites: None"
+                    f"Approximately {hours:.1f} hour(s)"
                 )
 
 
-    # ========================================================
-    # SAVE TOPICS
-    # ========================================================
+        # ====================================================
+        # TOPICS
+        # ====================================================
 
-    st.divider()
+        st.divider()
 
-    st.subheader(
-        "💾 Save Topics"
-    )
+        st.subheader(
+            "📋 Topics Identified"
+        )
 
-    st.write(
-        "Save these AI-generated topics to this subject. "
-        "They will then be available to Study Plan, Learn, "
-        "AI Tutor, Quiz, and Progress."
-    )
 
-    if st.button(
-        "💾 Save Topics to My Subject",
-        type="primary",
-        use_container_width=True
-    ):
+        if not analysis_topics:
 
-        try:
-
-            existing_topics = get_topics(
-                selected_subject["id"]
+            st.warning(
+                "The AI analysis did not identify any topics."
             )
 
-            existing_names = {
-                str(topic["name"]).strip().lower()
-                for topic in existing_topics
-            }
+        else:
 
-            added_count = 0
-            skipped_count = 0
+            for index, topic in enumerate(
+                analysis_topics,
+                start=1,
+            ):
 
-            # ------------------------------------------------
-            # INSERT TOPICS
-            # ------------------------------------------------
+                topic_name = (
+                    getattr(topic, "name", "")
+                    or "Unnamed Topic"
+                )
 
-            for topic in analysis.topics:
+                unit = (
+                    getattr(topic, "unit", "")
+                    or "General"
+                )
 
-                topic_name = topic.topic.strip()
+                priority = (
+                    getattr(topic, "priority", "")
+                    or "MEDIUM"
+                )
+                
+                priority = str(
+                    priority
+                ).strip().upper()
 
-                if not topic_name:
+                estimated_minutes = int(
+                    getattr(
+                        topic,
+                        "estimated_minutes",
+                        0
+                    )
+                    or 0
+                )
 
-                    continue
+                reason = (
+                    getattr(
+                        topic,
+                        "reason",
+                        ""
+                    )
+                    or "No reason provided."
+                )
 
-                # Prevent duplicates
-                if (
-                    topic_name.lower()
-                    in existing_names
+                prerequisites = (
+                    getattr(
+                        topic,
+                        "prerequisites",
+                        []
+                    )
+                    or []
+                )
+
+
+                with st.container(
+                    border=True
                 ):
 
-                    skipped_count += 1
+                    st.markdown(
+                        f"### {index}. {topic_name}"
+                    )
 
-                    continue
+                    col1, col2, col3 = st.columns(3)
 
-                create_topic(
 
-                    subject_id=(
+                    with col1:
+
+                        st.write(
+                            f"📘 **Unit**"
+                        )
+
+                        st.write(
+                            unit
+                        )
+
+
+                    with col2:
+
+                        st.write(
+                            "🎯 **Priority**"
+                        )
+
+                        if priority == "HIGH":
+
+                            st.error(
+                                "🔥 HIGH"
+                            )
+
+                        elif priority == "MEDIUM":
+
+                            st.warning(
+                                "🟡 MEDIUM"
+                            )
+
+                        else:
+
+                            st.success(
+                                "🟢 LOW"
+                            )
+
+
+                    with col3:
+
+                        st.write(
+                            "⏱️ **Estimated Time**"
+                        )
+
+                        st.write(
+                            f"{estimated_minutes} minute(s)"
+                        )
+
+
+                    st.write(
+                        f"💡 **Reason:** {reason}"
+                    )
+
+
+                    if prerequisites:
+
+                        prerequisite_text = ", ".join(
+                            str(item)
+                            for item in prerequisites
+                        )
+
+                        st.write(
+                            f"🔗 **Prerequisites:** "
+                            f"{prerequisite_text}"
+                        )
+
+                    else:
+
+                        st.caption(
+                            "🔗 Prerequisites: None"
+                        )
+
+
+        # ====================================================
+        # SAVE TOPICS
+        # ====================================================
+
+        st.divider()
+
+        st.subheader(
+            "💾 Save Topics"
+        )
+
+        st.write(
+            "Save the analyzed topics to this subject. "
+            "Saved topics become available to Study Plan, "
+            "Learn, AI Tutor, Practice Quiz, Progress, "
+            "and Revision."
+        )
+
+
+        save_col1, save_col2 = st.columns(
+            [3, 1]
+        )
+
+
+        with save_col1:
+
+            if st.button(
+                "💾 Save Topics to My Subject",
+                type="primary",
+                use_container_width=True,
+                key="save_analyzed_topics_button",
+            ):
+
+                try:
+
+                    existing_topics = get_topics(
                         selected_subject["id"]
-                    ),
+                    )
 
-                    name=topic_name,
-
-                    unit=topic.unit,
-
-                    priority=topic.priority
-                )
-
-                existing_names.add(
-                    topic_name.lower()
-                )
-
-                added_count += 1
+                    existing_names = {
+                        str(
+                            topic["name"]
+                        ).strip().lower()
+                        for topic in existing_topics
+                    }
 
 
-            # ------------------------------------------------
-            # RESULT
-            # ------------------------------------------------
-
-            if added_count > 0:
-
-                st.success(
-                    f"✅ {added_count} topic(s) "
-                    f"added successfully!"
-                )
-
-            if skipped_count > 0:
-
-                st.info(
-                    f"ℹ️ {skipped_count} duplicate "
-                    f"topic(s) were skipped."
-                )
-
-            # Clear analysis after saving
-            st.session_state.pop(
-                "syllabus_analysis",
-                None
-            )
-
-            st.session_state.pop(
-                "syllabus_analysis_subject_id",
-                None
-            )
-
-            st.session_state[
-                "syllabus_saved"
-            ] = True
-
-            st.rerun()
-
-        except Exception as error:
-
-            st.error(
-                "❌ Unable to save topics."
-            )
-
-            st.exception(error)
+                    added_count = 0
+                    skipped_count = 0
 
 
-# ============================================================
-# CURRENT SUBJECT TOPICS
-# ============================================================
+                    for topic in analysis_topics:
 
-if selected_subject:
+                        topic_name = (
+                            getattr(
+                                topic,
+                                "topic",
+                                ""
+                            )
+                            or ""
+                        ).strip()
+
+
+                        if not topic_name:
+
+                            continue
+
+
+                        normalized_name = (
+                            topic_name.lower()
+                        )
+
+
+                        if (
+                            normalized_name
+                            in existing_names
+                        ):
+
+                            skipped_count += 1
+
+                            continue
+
+
+                        create_topic(
+
+                            subject_id=(
+                                selected_subject["id"]
+                            ),
+
+                            name=topic_name,
+
+                            unit=(
+                                getattr(
+                                    topic,
+                                    "unit",
+                                    None
+                                )
+                            ),
+
+                            priority=(
+                                getattr(
+                                    topic,
+                                    "priority",
+                                    "MEDIUM"
+                                )
+                            ),
+                        )
+
+
+                        existing_names.add(
+                            normalized_name
+                        )
+
+                        added_count += 1
+
+
+                    st.session_state[
+                        "syllabus_saved"
+                    ] = True
+
+
+                    if added_count > 0:
+
+                        st.success(
+                            f"✅ {added_count} topic(s) "
+                            f"added successfully."
+                        )
+
+
+                    if skipped_count > 0:
+
+                        st.info(
+                            f"ℹ️ {skipped_count} duplicate "
+                            f"topic(s) were skipped."
+                        )
+
+
+                    if (
+                        added_count == 0
+                        and skipped_count == 0
+                    ):
+
+                        st.info(
+                            "No new topics were available to save."
+                        )
+
+
+                    clear_syllabus_analysis()
+
+                    st.rerun()
+
+
+                except Exception as error:
+
+                    st.error(
+                        "Unable to save the analyzed topics."
+                    )
+
+                    st.exception(error)
+
+
+        with save_col2:
+
+            if st.button(
+                "🗑️ Clear Analysis",
+                use_container_width=True,
+                key="clear_syllabus_analysis_button",
+            ):
+
+                clear_syllabus_analysis()
+
+                st.session_state[
+                    "syllabus_saved"
+                ] = False
+
+                st.rerun()
+
+
+    # ========================================================
+    # SAVED TOPICS
+    # ========================================================
 
     st.divider()
 
     st.subheader(
-        f"📚 Topics in {selected_subject['name']}"
+        "📚 Saved Topics"
     )
 
-    current_topics = get_topics(
+
+    saved_topics = get_topics(
         selected_subject["id"]
     )
 
-    if not current_topics:
+
+    if not saved_topics:
 
         st.info(
-            """
-            No topics have been added yet.
-
-            Paste your syllabus above and use
-            **🧠 Analyze Syllabus → 💾 Save Topics**.
-            """
+            "No topics have been saved for this subject yet. "
+            "Analyze your syllabus above to create them."
         )
 
     else:
 
-        st.success(
-            f"{len(current_topics)} topic(s) "
-            f"currently available."
+        st.caption(
+            f"{len(saved_topics)} topic(s) saved"
         )
 
+
         for index, topic in enumerate(
-            current_topics,
-            start=1
+            saved_topics,
+            start=1,
         ):
 
-            col1, col2, col3 = st.columns(
-                [4, 2, 1]
+            topic_name = (
+                topic.get(
+                    "name"
+                )
+                or "Unnamed Topic"
             )
 
-            with col1:
+            unit = (
+                topic.get(
+                    "unit"
+                )
+                or "General"
+            )
 
-                st.write(
-                    f"**{index}. {topic['name']}**"
+            priority = (
+                topic.get(
+                    "priority"
+                )
+                or "MEDIUM"
+            )
+
+
+            with st.container(
+                border=True
+            ):
+
+                topic_col1, topic_col2, topic_col3 = (
+                    st.columns(
+                        [5, 2, 2]
+                    )
                 )
 
-                if topic["unit"]:
 
-                    st.caption(
-                        topic["unit"]
+                with topic_col1:
+
+                    st.markdown(
+                        f"**{index}. {topic_name}**"
                     )
 
-            with col2:
-
-                priority = (
-                    topic["priority"]
-                    or "MEDIUM"
-                )
-
-                st.write(
-                    f"🎯 {priority}"
-                )
-
-            with col3:
-
-                mastery = (
-                    topic["mastery"]
-                    or 0
-                )
-
-                st.write(
-                    f"📊 {mastery:.0f}%")
+                    st.caption(
+                        f"Unit: {unit}"
+                    )
 
 
-# ============================================================
-# EDIT SUBJECT
-# ============================================================
+                with topic_col2:
 
-if selected_subject:
+                    priority_upper = str(
+                        priority
+                    ).upper()
+
+                    if priority_upper == "HIGH":
+
+                        st.error(
+                            "🔥 HIGH"
+                        )
+
+                    elif priority_upper == "MEDIUM":
+
+                        st.warning(
+                            "🟡 MEDIUM"
+                        )
+
+                    else:
+
+                        st.success(
+                            "🟢 LOW"
+                        )
+
+
+                with topic_col3:
+
+                    st.caption(
+                        "Available in Learn, Quiz, "
+                        "Progress and Revision"
+                    )
+
+
+    # ========================================================
+    # EDIT SUBJECT
+    # ========================================================
 
     st.divider()
 
     st.subheader(
-        f"✏️ Edit: {selected_subject['name']}"
+        "⚙️ Subject Settings"
     )
 
-    with st.form("edit_subject_form"):
 
-        new_name = st.text_input(
-            "Subject Name",
-            value=selected_subject["name"]
+    with st.expander(
+        f"✏️ Edit {selected_subject['name']}"
+    ):
+
+        with st.form(
+            "edit_subject_form"
+        ):
+
+            new_name = st.text_input(
+                "Subject Name",
+                value=(
+                    selected_subject["name"]
+                    or ""
+                ),
+            )
+
+            new_exam_date = st.text_input(
+                "Exam Date",
+                value=str(
+                    selected_subject["exam_date"]
+                    or ""
+                ),
+            )
+
+
+            new_daily_hours = st.number_input(
+                "Study Hours Per Day",
+                min_value=0.5,
+                max_value=12.0,
+                value=float(
+                    selected_subject["daily_hours"]
+                    or 2.0
+                ),
+                step=0.5,
+            )
+
+
+            new_goal = st.text_area(
+                "Study Goal",
+                value=(
+                    selected_subject["goal"]
+                    or ""
+                ),
+                height=100,
+            )
+
+
+            save_changes = st.form_submit_button(
+                "💾 Save Changes",
+                type="primary",
+                use_container_width=True,
+            )
+
+
+            if save_changes:
+
+                cleaned_name = (
+                    new_name or ""
+                ).strip()
+
+
+                if not cleaned_name:
+
+                    st.error(
+                        "Subject name cannot be empty."
+                    )
+
+                else:
+
+                    try:
+
+                        update_subject(
+
+                            subject_id=(
+                                selected_subject_id
+                            ),
+
+                            name=cleaned_name,
+
+                            exam_date=(
+                                new_exam_date.strip()
+                            ),
+
+                            daily_hours=(
+                                new_daily_hours
+                            ),
+
+                            goal=(
+                                new_goal or ""
+                            ).strip(),
+                        )
+
+
+                        st.success(
+                            "✅ Subject updated successfully."
+                        )
+
+                        st.rerun()
+
+
+                    except Exception as error:
+
+                        st.error(
+                            "Unable to update the subject."
+                        )
+
+                        st.exception(error)
+
+
+# ============================================================
+# NO SELECTED SUBJECT
+# ============================================================
+
+else:
+
+    if subjects:
+
+        st.divider()
+
+        st.info(
+            "👆 Select a subject above to analyze its syllabus "
+            "and manage its learning topics."
         )
 
-        new_exam_date = st.text_input(
-            "Exam Date",
-            value=selected_subject["exam_date"]
+    else:
+
+        st.divider()
+
+        st.info(
+            "📚 Add your first subject to begin building "
+            "your personalized StudyFlow learning path."
         )
-
-        new_daily_hours = st.number_input(
-            "Study Hours Per Day",
-            min_value=0.5,
-            max_value=12.0,
-            value=float(
-                selected_subject["daily_hours"]
-                or 2
-            ),
-            step=0.5
-        )
-
-        new_goal = st.text_area(
-            "Study Goal",
-            value=selected_subject["goal"] or ""
-        )
-
-        save_changes = st.form_submit_button(
-            "💾 Save Changes",
-            type="primary"
-        )
-
-        if save_changes:
-
-            if not new_name.strip():
-
-                st.error(
-                    "Subject name cannot be empty."
-                )
-
-            else:
-
-                update_subject(
-
-                    subject_id=selected_subject_id,
-
-                    name=new_name.strip(),
-
-                    exam_date=new_exam_date,
-
-                    daily_hours=new_daily_hours,
-
-                    goal=new_goal.strip()
-                )
-
-                st.success(
-                    "Subject updated successfully!"
-                )
-
-                st.rerun()

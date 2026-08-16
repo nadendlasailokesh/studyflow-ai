@@ -1,8 +1,12 @@
 from pydantic import BaseModel
 
-from src.ai.progress import save_progress_to_database
+from src.ai.progress import (
+    save_progress_to_database
+)
 
-
+from src.ai.revision_integration import (
+    update_revision_after_quiz,
+)
 # ============================================================
 # SINGLE QUESTION EVALUATION
 # ============================================================
@@ -32,18 +36,28 @@ def evaluate_answer(
     # --------------------------------------------------------
 
     is_correct = (
+
         selected_answer is not None
-        and selected_answer == correct_answer
+
+        and
+
+        selected_answer == correct_answer
     )
 
-    # --------------------------------------------------------
-    # Calculate question score
-    # --------------------------------------------------------
-
-    score = 1 if is_correct else 0
 
     # --------------------------------------------------------
-    # Generate feedback
+    # Question score
+    # --------------------------------------------------------
+
+    score = (
+        1
+        if is_correct
+        else 0
+    )
+
+
+    # --------------------------------------------------------
+    # Feedback
     # --------------------------------------------------------
 
     if is_correct:
@@ -58,6 +72,7 @@ def evaluate_answer(
             "Not quite. Review the explanation "
             "and try again."
         )
+
 
     # --------------------------------------------------------
     # Return evaluation
@@ -97,13 +112,15 @@ def evaluate_quiz(
             "Quiz contains no questions."
         )
 
+
     # --------------------------------------------------------
-    # Initialize counters
+    # Initialize
     # --------------------------------------------------------
 
     correct_answers = 0
 
     results = []
+
 
     # --------------------------------------------------------
     # Evaluate every question
@@ -117,6 +134,7 @@ def evaluate_quiz(
             index
         )
 
+
         evaluation = evaluate_answer(
 
             question=question.question,
@@ -128,21 +146,16 @@ def evaluate_quiz(
             explanation=question.explanation
         )
 
-        # ----------------------------------------------------
-        # Count correct answers
-        # ----------------------------------------------------
 
         if evaluation.is_correct:
 
             correct_answers += 1
 
-        # ----------------------------------------------------
-        # Store result
-        # ----------------------------------------------------
 
         results.append(
             evaluation
         )
+
 
     # --------------------------------------------------------
     # Total questions
@@ -152,25 +165,32 @@ def evaluate_quiz(
         quiz.questions
     )
 
+
     # --------------------------------------------------------
-    # Calculate percentage
+    # Current quiz score
     # --------------------------------------------------------
 
     score_percentage = (
+
         correct_answers
-        / total_questions
+        /
+        total_questions
+
     ) * 100
+
 
     score_percentage = round(
         score_percentage,
         2
     )
 
+
     # --------------------------------------------------------
-    # Save progress
+    # Update mastery
     # --------------------------------------------------------
 
     progress = None
+
 
     if topic_id is not None:
 
@@ -182,11 +202,26 @@ def evaluate_quiz(
 
             total_questions=total_questions,
 
-            difficulty=quiz.difficulty
+            difficulty=quiz.difficulty,
+
+            topic=quiz.topic
         )
 
     # --------------------------------------------------------
-    # Return complete quiz result
+    # Phase 8.4
+    # Update spaced-repetition schedule
+    # --------------------------------------------------------
+
+        revision = update_revision_after_quiz(
+
+            topic_id=topic_id,
+
+            score_percentage=score_percentage,
+        )
+
+
+    # --------------------------------------------------------
+    # Return complete result
     # --------------------------------------------------------
 
     return {
@@ -203,5 +238,7 @@ def evaluate_quiz(
 
         "results": results,
 
-        "progress": progress
+        "progress": progress,
+
+        "revision": revision,
     }

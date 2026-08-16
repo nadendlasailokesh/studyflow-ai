@@ -21,19 +21,19 @@ from src.database.db import initialize_database
 
 from src.database.repository import (
     get_all_subjects,
-    get_topics
+    get_topics,
 )
 
 from src.ai.quiz import (
-    generate_quiz
+    generate_quiz,
 )
 
 from src.ai.quiz_evaluator import (
-    evaluate_quiz
+    evaluate_quiz,
 )
 
 from src.ai.progress import (
-    get_learning_recommendation
+    get_learning_recommendation,
 )
 
 
@@ -44,7 +44,7 @@ from src.ai.progress import (
 st.set_page_config(
     page_title="Practice Quiz | StudyFlow AI",
     page_icon="❓",
-    layout="wide"
+    layout="wide",
 )
 
 
@@ -86,6 +86,18 @@ st.divider()
 
 
 # ============================================================
+# PHASE 6.3
+# READ LEARNING → QUIZ TRANSITION CONTEXT
+# ============================================================
+
+quiz_transition_context = (
+    st.session_state.get(
+        "quiz_transition_context"
+    )
+)
+
+
+# ============================================================
 # LOAD SUBJECTS
 # ============================================================
 
@@ -105,7 +117,7 @@ if not subjects:
 
 
 # ============================================================
-# SUBJECT SELECTION
+# SUBJECT OPTIONS
 # ============================================================
 
 subject_options = {
@@ -113,10 +125,73 @@ subject_options = {
     for subject in subjects
 }
 
+subject_names = list(
+    subject_options.keys()
+)
+
+
+# ============================================================
+# FIND TRANSITION SUBJECT
+# ============================================================
+
+transition_subject_name = None
+transition_subject_id = None
+
+if quiz_transition_context:
+
+    transition_subject_name = (
+        quiz_transition_context.get(
+            "subject_name"
+        )
+    )
+
+    transition_subject_id = (
+        quiz_transition_context.get(
+            "subject_id"
+        )
+    )
+
+
+# ============================================================
+# DETERMINE SUBJECT INDEX
+# ============================================================
+
+default_subject_index = 0
+
+
+if (
+    transition_subject_name
+    and
+    transition_subject_name in subject_names
+):
+
+    default_subject_index = (
+        subject_names.index(
+            transition_subject_name
+        )
+    )
+
+elif transition_subject_id is not None:
+
+    for index, subject in enumerate(
+        subjects
+    ):
+
+        if subject["id"] == transition_subject_id:
+
+            default_subject_index = index
+
+            break
+
+
+# ============================================================
+# SUBJECT SELECTION
+# ============================================================
 
 selected_subject_name = st.selectbox(
     "📚 Choose Subject",
-    list(subject_options.keys())
+    subject_names,
+    index=default_subject_index,
 )
 
 
@@ -145,7 +220,7 @@ if not topics:
 
 
 # ============================================================
-# TOPIC SELECTION
+# TOPIC OPTIONS
 # ============================================================
 
 topic_options = {
@@ -153,10 +228,77 @@ topic_options = {
     for topic in topics
 }
 
+topic_names = list(
+    topic_options.keys()
+)
+
+
+# ============================================================
+# FIND TRANSITION TOPIC
+# ============================================================
+
+transition_topic_id = None
+transition_topic_name = None
+
+if quiz_transition_context:
+
+    transition_topic_id = (
+        quiz_transition_context.get(
+            "topic_id"
+        )
+    )
+
+    transition_topic_name = (
+        quiz_transition_context.get(
+            "topic_name"
+        )
+    )
+
+
+# ============================================================
+# DETERMINE TOPIC INDEX
+# ============================================================
+
+default_topic_index = 0
+
+
+# Topic ID is preferred because names could theoretically
+# be duplicated.
+
+if transition_topic_id is not None:
+
+    for index, topic in enumerate(
+        topics
+    ):
+
+        if topic["id"] == transition_topic_id:
+
+            default_topic_index = index
+
+            break
+
+
+elif (
+    transition_topic_name
+    and
+    transition_topic_name in topic_names
+):
+
+    default_topic_index = (
+        topic_names.index(
+            transition_topic_name
+        )
+    )
+
+
+# ============================================================
+# TOPIC SELECTION
+# ============================================================
 
 selected_topic_name = st.selectbox(
     "📘 Choose Topic",
-    list(topic_options.keys())
+    topic_names,
+    index=default_topic_index,
 )
 
 
@@ -165,8 +307,14 @@ selected_topic = topic_options[
 ]
 
 
+# ============================================================
+# TOPIC INFORMATION
+# ============================================================
+
 topic_unit = (
-    selected_topic["unit"]
+    selected_topic.get(
+        "unit"
+    )
     or "General"
 )
 
@@ -177,14 +325,56 @@ st.caption(
 )
 
 
-st.divider()
+# ============================================================
+# PHASE 6.3
+# SHOW TRANSITION NOTICE
+# ============================================================
+
+is_transition_topic = False
+
+
+if transition_topic_id is not None:
+
+    is_transition_topic = (
+        selected_topic["id"]
+        == transition_topic_id
+    )
+
+elif transition_topic_name:
+
+    is_transition_topic = (
+        selected_topic_name
+        == transition_topic_name
+    )
+
+
+if (
+    quiz_transition_context
+    and
+    is_transition_topic
+):
+
+    st.success(
+        f"""
+📖 **Learning → Quiz**
+
+You finished studying **{selected_topic_name}**.
+
+This quiz is automatically prepared for the
+topic you just studied.
+"""
+    )
 
 
 # ============================================================
 # QUIZ SETTINGS
 # ============================================================
 
-st.subheader("⚙️ Quiz Settings")
+st.divider()
+
+st.subheader(
+    "⚙️ Quiz Settings"
+)
 
 
 col1, col2 = st.columns(2)
@@ -197,9 +387,9 @@ with col1:
         [
             "EASY",
             "MEDIUM",
-            "HARD"
+            "HARD",
         ],
-        index=1
+        index=1,
     )
 
 
@@ -207,8 +397,11 @@ with col2:
 
     number_of_questions = st.selectbox(
         "📝 Number of Questions",
-        [5, 10],
-        index=0
+        [
+            5,
+            10,
+        ],
+        index=0,
     )
 
 
@@ -226,15 +419,25 @@ with col1:
 
     st.metric(
         "Priority",
-        selected_topic["priority"]
+        selected_topic.get(
+            "priority"
+        )
+        or "MEDIUM",
     )
 
 
 with col2:
 
+    mastery = (
+        selected_topic.get(
+            "mastery"
+        )
+        or 0
+    )
+
     st.metric(
         "Mastery",
-        f"{selected_topic['mastery']:.0f}%"
+        f"{float(mastery):.0f}%",
     )
 
 
@@ -242,7 +445,10 @@ with col3:
 
     st.metric(
         "Status",
-        selected_topic["status"]
+        selected_topic.get(
+            "status"
+        )
+        or "NOT STARTED",
     )
 
 
@@ -256,7 +462,7 @@ st.divider()
 if st.button(
     "✨ Generate Quiz",
     type="primary",
-    use_container_width=True
+    use_container_width=True,
 ):
 
     with st.spinner(
@@ -267,7 +473,9 @@ if st.button(
 
             quiz = generate_quiz(
 
-                subject_name=selected_subject_name,
+                subject_name=(
+                    selected_subject_name
+                ),
 
                 unit=topic_unit,
 
@@ -275,9 +483,15 @@ if st.button(
 
                 difficulty=difficulty,
 
-                number_of_questions=number_of_questions
+                number_of_questions=(
+                    number_of_questions
+                ),
             )
 
+
+            # ------------------------------------------------
+            # STORE QUIZ
+            # ------------------------------------------------
 
             st.session_state.quiz = quiz
 
@@ -289,13 +503,35 @@ if st.button(
                 selected_topic_name
             )
 
-            st.session_state.quiz_submitted = False
+            st.session_state.quiz_subject_id = (
+                selected_subject_id
+            )
+
+            st.session_state.quiz_subject_name = (
+                selected_subject_name
+            )
+
+            st.session_state.quiz_submitted = (
+                False
+            )
 
             st.session_state.quiz_result = None
+
+
+            # ------------------------------------------------
+            # Mark transition as consumed.
+            # ------------------------------------------------
+
+            st.session_state.pop(
+                "quiz_transition_context",
+                None,
+            )
+
 
             st.success(
                 "✅ Quiz generated successfully!"
             )
+
 
         except Exception as error:
 
@@ -329,11 +565,13 @@ if "quiz" in st.session_state:
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # QUIZ FORM
-    # --------------------------------------------------------
+    # ========================================================
 
-    with st.form("quiz_form"):
+    with st.form(
+        "quiz_form"
+    ):
 
         answers = {}
 
@@ -356,9 +594,13 @@ if "quiz" in st.session_state:
 
                 question.options,
 
-                key=f"quiz_answer_{index}",
+                key=(
+                    f"quiz_answer_"
+                    f"{st.session_state.quiz_topic_id}_"
+                    f"{index}"
+                ),
 
-                index=None
+                index=None,
             )
 
             st.divider()
@@ -367,7 +609,7 @@ if "quiz" in st.session_state:
         submitted = st.form_submit_button(
             "✅ Submit Quiz",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
         )
 
 
@@ -410,7 +652,7 @@ if "quiz" in st.session_state:
 
                         topic_id=(
                             st.session_state.quiz_topic_id
-                        )
+                        ),
                     )
 
 
@@ -436,11 +678,9 @@ if "quiz" in st.session_state:
 # QUIZ RESULT
 # ============================================================
 
-if (
-    st.session_state.get(
-        "quiz_submitted",
-        False
-    )
+if st.session_state.get(
+    "quiz_submitted",
+    False,
 ):
 
     result = st.session_state.quiz_result
@@ -465,9 +705,9 @@ if (
     ]
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SCORE
-    # --------------------------------------------------------
+    # ========================================================
 
     col1, col2, col3 = st.columns(3)
 
@@ -476,7 +716,7 @@ if (
 
         st.metric(
             "Score",
-            f"{score:.0f}%"
+            f"{score:.0f}%",
         )
 
 
@@ -484,7 +724,7 @@ if (
 
         st.metric(
             "Correct",
-            f"{correct}/{total}"
+            f"{correct}/{total}",
         )
 
 
@@ -498,20 +738,20 @@ if (
 
             st.metric(
                 "Status",
-                progress.status
+                progress.status,
             )
 
         else:
 
             st.metric(
                 "Status",
-                "Saved"
+                "Saved",
             )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SCORE MESSAGE
-    # --------------------------------------------------------
+    # ========================================================
 
     if score >= 80:
 
@@ -630,9 +870,9 @@ if (
         )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # NEXT STEP
-        # ----------------------------------------------------
+        # ====================================================
 
         if recommendation["action"] == "RELEARN":
 
