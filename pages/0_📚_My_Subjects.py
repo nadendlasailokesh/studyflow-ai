@@ -842,7 +842,7 @@ if selected_subject:
             ):
 
                 topic_name = (
-                    getattr(topic, "name", "")
+                    getattr(topic, "topic", "")
                     or "Unnamed Topic"
                 )
 
